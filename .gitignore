@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+.finance_rag/
+.env
+*.egg-info/
+node_modules/
+.next/
+out/
+.env.local
