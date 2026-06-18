@@ -1,3 +1,12 @@
+---
+title: Finance Assistant
+emoji: 📈
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+---
+
 # Finance AI Hugging Face Space
 
 This Space is the model service for the no-card demo deployment.

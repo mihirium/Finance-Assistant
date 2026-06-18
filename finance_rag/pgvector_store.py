@@ -179,6 +179,8 @@ class PgVectorStore:
         source_type: str | None = None,
         ticker: str | None = None,
         limit: int = 0,
+        progress_every: int = 25,
+        progress_callback: object | None = None,
     ) -> int:
         psycopg = _load_psycopg()
         filters = []
@@ -206,7 +208,7 @@ class PgVectorStore:
                 tuple(params),
             ).fetchall()
 
-            for chunk_id, title, text in rows:
+            for idx, (chunk_id, title, text) in enumerate(rows, start=1):
                 embedding = self.embedder.embed_document(title=title, text=text)
                 conn.execute(
                     """
@@ -216,6 +218,10 @@ class PgVectorStore:
                     """,
                     (_vector_literal(embedding), chunk_id),
                 )
+                if progress_every > 0 and idx % progress_every == 0:
+                    conn.commit()
+                    if progress_callback:
+                        progress_callback(idx, len(rows))
         return len(rows)
 
     def ingest_price_bars(self, bars: list[PriceBar]) -> int:

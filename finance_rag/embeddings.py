@@ -16,6 +16,8 @@ DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 DEFAULT_OLLAMA_MAX_CHARS = 4000
 DEFAULT_HF_EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 DEFAULT_HF_MAX_CHARS = 4000
+DEFAULT_SENTENCE_TRANSFORMERS_MODEL = DEFAULT_HF_EMBEDDING_MODEL
+DEFAULT_SENTENCE_TRANSFORMERS_MAX_CHARS = 4000
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9$.-]{1,}")
 
 
@@ -152,6 +154,63 @@ class HuggingFaceEmbedder:
                 f"but the pgvector schema expects {self.dimensions}."
             )
         return values
+
+
+class SentenceTransformersEmbedder:
+    """Local sentence-transformers embedder for bulk re-embedding.
+
+    Use the same model as the Hugging Face Space so stored chunk vectors and
+    deployed query vectors live in the same vector space.
+    """
+
+    def __init__(
+        self,
+        *,
+        model: str | None = None,
+        dimensions: int = DEFAULT_EMBEDDING_DIMENSIONS,
+        max_chars: int | None = None,
+    ) -> None:
+        self.model = model or os.getenv("SENTENCE_TRANSFORMERS_MODEL", DEFAULT_SENTENCE_TRANSFORMERS_MODEL)
+        self.dimensions = dimensions
+        self.max_chars = int(
+            os.getenv(
+                "SENTENCE_TRANSFORMERS_MAX_CHARS",
+                max_chars or DEFAULT_SENTENCE_TRANSFORMERS_MAX_CHARS,
+            )
+        )
+        self._model = None
+
+    def embed_document(self, *, title: str, text: str) -> list[float]:
+        return self._embed(f"title: {title or 'none'} | text: {text}")
+
+    def embed_query(self, query: str) -> list[float]:
+        return self._embed(query)
+
+    def _embed(self, text: str) -> list[float]:
+        values = self._load_model().encode(
+            text[: self.max_chars],
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
+        result = [float(value) for value in values.tolist()]
+        if len(result) != self.dimensions:
+            raise ValueError(
+                f"sentence-transformers model {self.model} returned {len(result)} dimensions, "
+                f"but the pgvector schema expects {self.dimensions}."
+            )
+        return result
+
+    def _load_model(self):
+        if self._model is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Install sentence-transformers first: "
+                    "pip install 'sentence-transformers>=3.2'"
+                ) from exc
+            self._model = SentenceTransformer(self.model)
+        return self._model
 
 
 def _extract_ollama_embedding(data: dict) -> list[float]:

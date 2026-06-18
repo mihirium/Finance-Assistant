@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from urllib.error import URLError
 
-from finance_rag.embeddings import HashingEmbedder, HuggingFaceEmbedder, OllamaEmbedder
+from finance_rag.embeddings import HashingEmbedder, HuggingFaceEmbedder, OllamaEmbedder, SentenceTransformersEmbedder
 from finance_rag.index import LocalVectorIndex
 from finance_rag.llm import answer_question
 from finance_rag.pgvector_store import DEFAULT_DATABASE_URL, PgVectorStore
@@ -23,7 +23,7 @@ from finance_rag.sources import fetch_sec_filings, parse_forms
 DEFAULT_DATA_DIR = Path(".finance_rag")
 DEFAULT_USER_AGENT = "FinanceAI/0.1 contact@example.com"
 BACKENDS = ("local", "pgvector")
-EMBEDDING_PROVIDERS = ("ollama", "huggingface", "hashing")
+EMBEDDING_PROVIDERS = ("ollama", "huggingface", "sentence-transformers", "hashing")
 
 
 def main() -> None:
@@ -315,6 +315,7 @@ def _reembed_chunks(args: argparse.Namespace) -> None:
             source_type=args.source_type,
             ticker=ticker,
             limit=args.limit,
+            progress_callback=lambda done, total: print(f"Re-embedded {done:,}/{total:,} chunks..."),
         )
     except Exception as exc:
         raise SystemExit(_backend_error_message(exc)) from exc
@@ -428,6 +429,8 @@ def _make_embedder(provider: str):
         return OllamaEmbedder()
     if provider == "huggingface":
         return HuggingFaceEmbedder()
+    if provider == "sentence-transformers":
+        return SentenceTransformersEmbedder()
     if provider == "hashing":
         return HashingEmbedder()
     raise ValueError(f"Unknown embedding provider: {provider}")

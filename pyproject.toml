@@ -9,6 +9,11 @@ dependencies = [
     "uvicorn[standard]>=0.32",
 ]
 
+[project.optional-dependencies]
+local-embeddings = [
+    "sentence-transformers>=3.2",
+]
+
 [project.scripts]
 finance-chat = "finance_rag.cli:main"
 finance-api = "finance_rag.api:main"

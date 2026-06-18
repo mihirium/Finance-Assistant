@@ -8,13 +8,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from finance_rag.embeddings import HashingEmbedder, HuggingFaceEmbedder, OllamaEmbedder
+from finance_rag.embeddings import HashingEmbedder, HuggingFaceEmbedder, OllamaEmbedder, SentenceTransformersEmbedder
 from finance_rag.llm import answer_question
 from finance_rag.models import SearchResult
 from finance_rag.pgvector_store import DEFAULT_DATABASE_URL, PgVectorStore
 
 
-EmbeddingProvider = Literal["ollama", "huggingface", "hashing"]
+EmbeddingProvider = Literal["ollama", "huggingface", "sentence-transformers", "hashing"]
 
 
 class ChatRequest(BaseModel):
@@ -100,6 +100,8 @@ def _make_embedder(provider: EmbeddingProvider):
         return HashingEmbedder()
     if provider == "huggingface":
         return HuggingFaceEmbedder()
+    if provider == "sentence-transformers":
+        return SentenceTransformersEmbedder()
     return OllamaEmbedder()
 
 

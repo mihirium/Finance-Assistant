@@ -37,6 +37,46 @@ finance-chat chat
 
 SEC asks automated clients to use a descriptive user agent with contact info. Pass yours with `--user-agent`.
 
+## Run On Another Machine
+
+After pushing this repo to GitHub, clone it on the other machine and install the
+Python app with the local embedding extras:
+
+```bash
+git clone YOUR_GITHUB_REPO_URL
+cd Finance-Ai
+python -m venv .venv
+
+# macOS/Linux
+. .venv/bin/activate
+
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
+
+pip install -e ".[local-embeddings]"
+```
+
+Set the Supabase database URL:
+
+```bash
+# macOS/Linux
+export DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@db.gktoboieleghbtsiksdt.supabase.co:5432/postgres?sslmode=require"
+
+# Windows PowerShell
+# $env:DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@db.gktoboieleghbtsiksdt.supabase.co:5432/postgres?sslmode=require"
+```
+
+Then smoke test and run the local GPU/CPU re-embed:
+
+```bash
+finance-chat reembed-chunks --embedding-provider sentence-transformers --limit 25
+finance-chat reembed-chunks --embedding-provider sentence-transformers
+```
+
+The first run downloads `sentence-transformers/all-mpnet-base-v2`. On a PC with
+an NVIDIA GPU and a compatible PyTorch install, this should be much faster than
+CPU-only re-embedding.
+
 ## Postgres + pgvector
 
 Start Postgres with pgvector:
@@ -139,17 +179,22 @@ returns 768-dimensional vectors. That matches the current pgvector schema.
 
 Important: query embeddings and stored chunk embeddings must come from the same
 model. If Supabase already contains chunks embedded with Ollama, re-embed them
-after the Hugging Face Space is live:
+with the same sentence-transformers model used by the Hugging Face Space. The
+fastest path is to run the bulk re-embedding locally on your Mac and write the
+new vectors directly to Supabase:
 
 ```bash
-export DATABASE_URL="postgresql://..."
-export HF_EMBEDDING_URL="https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space/embed"
+pip install -e ".[local-embeddings]"
 
-finance-chat reembed-chunks --embedding-provider huggingface --limit 25
-finance-chat reembed-chunks --embedding-provider huggingface
+export DATABASE_URL="postgresql://..."
+
+finance-chat reembed-chunks --embedding-provider sentence-transformers --limit 25
+finance-chat reembed-chunks --embedding-provider sentence-transformers
 ```
 
 Use the `--limit 25` run as a smoke test before re-embedding everything.
+At deployed chat time, Vercel calls the Hugging Face Space `/embed` endpoint with
+the same default model, `sentence-transformers/all-mpnet-base-v2`.
 
 ## API
 
