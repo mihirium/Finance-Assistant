@@ -1,7 +1,7 @@
 [project]
 name = "finance-ai"
 version = "0.1.0"
-description = "CLI RAG chatbot for daily market news and SEC filing context."
+description = "CLI RAG chatbot for daily financial news."
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115",

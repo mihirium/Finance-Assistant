@@ -41,7 +41,7 @@ STOPWORDS = {
 
 def answer_question(question: str, results: list[SearchResult], *, synthesize: bool = True) -> str:
     if not results:
-        return "I could not find relevant context in the local index. Try ingesting more news or adding tickers."
+        return "I could not find relevant context in the local index. Try ingesting today's news again."
 
     warning = _direct_context_warning(question, results)
     if synthesize:
@@ -129,12 +129,9 @@ def _extractive_answer(
         snippet = result.chunk.text[:700].strip()
         if len(result.chunk.text) > 700:
             snippet += "..."
-        source_label = result.chunk.source_type
-        if result.chunk.ticker:
-            source_label += f" / {result.chunk.ticker}"
         lines.extend(
             [
-                f"[{idx}] {result.chunk.title} ({source_label}, score={result.score:.2f})",
+                f"[{idx}] {result.chunk.title} (news, score={result.score:.2f})",
                 snippet,
                 f"Source: {result.chunk.url}",
                 "",

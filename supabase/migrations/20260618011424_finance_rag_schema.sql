@@ -6,8 +6,6 @@ CREATE TABLE IF NOT EXISTS documents (
     title TEXT NOT NULL,
     url TEXT NOT NULL,
     published_at TIMESTAMPTZ,
-    ticker TEXT,
-    accession_number TEXT,
     raw_text TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -19,7 +17,6 @@ CREATE TABLE IF NOT EXISTS chunks (
     title TEXT NOT NULL,
     url TEXT NOT NULL,
     chunk_text TEXT NOT NULL,
-    ticker TEXT,
     published_at TIMESTAMPTZ,
     embedding vector(768) NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -27,24 +24,15 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 CREATE INDEX IF NOT EXISTS chunks_document_id_idx ON chunks(document_id);
 CREATE INDEX IF NOT EXISTS chunks_source_type_idx ON chunks(source_type);
-CREATE INDEX IF NOT EXISTS chunks_ticker_idx ON chunks(ticker);
 CREATE INDEX IF NOT EXISTS chunks_published_at_idx ON chunks(published_at);
 CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx
     ON chunks USING hnsw (embedding vector_cosine_ops);
 
-CREATE TABLE IF NOT EXISTS prices_daily (
-    ticker TEXT NOT NULL,
-    trade_date DATE NOT NULL,
-    open NUMERIC(18, 6) NOT NULL,
-    high NUMERIC(18, 6) NOT NULL,
-    low NUMERIC(18, 6) NOT NULL,
-    close NUMERIC(18, 6) NOT NULL,
-    adjusted_close NUMERIC(18, 6) NOT NULL,
-    volume BIGINT NOT NULL,
-    source TEXT NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (ticker, trade_date)
-);
+ALTER TABLE documents
+    ADD CONSTRAINT documents_source_type_check CHECK (source_type = 'news');
 
-CREATE INDEX IF NOT EXISTS prices_daily_trade_date_idx
-    ON prices_daily(trade_date);
+ALTER TABLE chunks
+    ADD CONSTRAINT chunks_source_type_check CHECK (source_type = 'news');
+
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chunks ENABLE ROW LEVEL SECURITY;

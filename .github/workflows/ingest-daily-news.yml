@@ -1,0 +1,64 @@
+name: Ingest daily financial news
+
+on:
+  schedule:
+    # 4 PM New York is 20:00 UTC during EDT and 21:00 UTC during EST.
+    - cron: "0 20 * * *"
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: daily-news-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check New York time
+        id: schedule
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}:$(TZ=America/New_York date +%z)" in
+              "0 20 * * *:-0400"|"0 21 * * *:-0500") echo "run=true" >> "$GITHUB_OUTPUT" ;;
+              *) echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      - name: Check out repository
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ingestion app
+        if: steps.schedule.outputs.run == 'true'
+        run: pip install -e .
+
+      - name: Ingest today's news
+        if: steps.schedule.outputs.run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          HF_EMBEDDING_URL: ${{ secrets.HF_EMBEDDING_URL }}
+          HF_EMBEDDING_MODEL: sentence-transformers/all-mpnet-base-v2
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        shell: bash
+        run: |
+          : "${DATABASE_URL:?Add the SUPABASE_DATABASE_URL repository secret}"
+          : "${HF_EMBEDDING_URL:?Add the HF_EMBEDDING_URL repository secret}"
+          finance-chat ingest \
+            --backend pgvector \
+            --embedding-provider huggingface \
+            --date "$(TZ=America/New_York date +%F)" \
+            --user-agent "FinanceAI daily news ingestion"

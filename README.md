@@ -1,122 +1,32 @@
 # Finance AI
 
-A small CLI RAG chatbot for asking what happened in markets today, grounded in same-day finance news and optional SEC 10-K context.
+A news-first RAG assistant for asking what happened in financial markets today. It retrieves same-day reporting, searches it with pgvector, and produces cited answers with local or Hugging Face models.
 
-## Quick Start
+The project intentionally does not store SEC filings or historical price bars.
+
+## Local Quick Start
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
-ollama pull nomic-embed-text
-finance-chat ingest --tickers AAPL,MSFT --user-agent "Your Name your.email@example.com"
-finance-chat chat
-```
 
-Ask questions like:
-
-```text
-what happened today in mega-cap tech?
-why is apple moving today, and what 10-k risks are relevant?
-what macro themes are showing up in today's finance news?
-```
-
-## How It Works
-
-`finance-chat ingest` fetches finance RSS feeds for the selected date and the latest 10-K for any tickers you pass. It chunks the documents and stores a local BM25-style retrieval index under `.finance_rag/index.json`.
-
-`finance-chat ask` and `finance-chat chat` retrieve the most relevant chunks and use a local Ollama chat model to write a concise cited answer. Use `--no-synthesis` to inspect the raw retrieved passages instead. Set `OLLAMA_CHAT_MODEL` to override the default chat model, `llama3.2`.
-
-## Commands
-
-```bash
-finance-chat ingest --tickers NVDA,JPM --date 2026-06-16 --user-agent "Your Name your.email@example.com"
-finance-chat ask "what happened today in banks?"
-finance-chat chat
-```
-
-SEC asks automated clients to use a descriptive user agent with contact info. Pass yours with `--user-agent`.
-
-## Run On Another Machine
-
-After pushing this repo to GitHub, clone it on the other machine and install the
-Python app with the local embedding extras:
-
-```bash
-git clone YOUR_GITHUB_REPO_URL
-cd Finance-Ai
-python -m venv .venv
-
-# macOS/Linux
-. .venv/bin/activate
-
-# Windows PowerShell
-# .venv\Scripts\Activate.ps1
-
-pip install -e ".[local-embeddings]"
-```
-
-Set the Supabase database URL:
-
-```bash
-# macOS/Linux
-export DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@db.gktoboieleghbtsiksdt.supabase.co:5432/postgres?sslmode=require"
-
-# Windows PowerShell
-# $env:DATABASE_URL="postgresql://postgres:YOUR_PASSWORD@db.gktoboieleghbtsiksdt.supabase.co:5432/postgres?sslmode=require"
-```
-
-Then smoke test and run the local GPU/CPU re-embed:
-
-```bash
-finance-chat reembed-chunks --embedding-provider sentence-transformers --limit 25
-finance-chat reembed-chunks --embedding-provider sentence-transformers
-```
-
-The first run downloads `sentence-transformers/all-mpnet-base-v2`. On a PC with
-an NVIDIA GPU and a compatible PyTorch install, this should be much faster than
-CPU-only re-embedding.
-
-## Postgres + pgvector
-
-Start Postgres with pgvector:
-
-```bash
 docker compose up -d
-```
-
-Install the Postgres client dependency after pulling these changes:
-
-```bash
-pip install -e .
-```
-
-Initialize the schema:
-
-```bash
 finance-chat init-db
-```
 
-Ingest news and filings into pgvector:
-
-```bash
-finance-chat ingest --backend pgvector --embedding-provider ollama --tickers AAPL,MSFT,NVDA --user-agent "Your Name your.email@example.com"
-```
-
-Ask against pgvector:
-
-```bash
-finance-chat ask --backend pgvector --embedding-provider ollama "what happened today in AI stocks?"
+ollama pull nomic-embed-text
+finance-chat ingest --backend pgvector --embedding-provider ollama
 finance-chat chat --backend pgvector --embedding-provider ollama
 ```
 
-Inspect raw retrieval instead of a synthesized answer:
+Use `--date YYYY-MM-DD` to ingest news for a specific date. Without it, `ingest` uses today.
 
 ```bash
-finance-chat ask --backend pgvector --embedding-provider ollama --no-synthesis "what happened today in AI stocks?"
+finance-chat ingest --backend pgvector --embedding-provider ollama --date 2026-06-20
+finance-chat ask --backend pgvector --embedding-provider ollama "what happened in markets today?"
 ```
 
-The default database URL is:
+The default local database URL is:
 
 ```text
 postgresql://finance_ai:finance_ai@localhost:5432/finance_ai
@@ -124,9 +34,63 @@ postgresql://finance_ai:finance_ai@localhost:5432/finance_ai
 
 Override it with `DATABASE_URL` or `--database-url`.
 
+## Architecture
+
+1. `finance-chat ingest` reads financial RSS feeds and keeps stories published on the requested date.
+2. The app chunks each story and computes a 768-dimensional embedding.
+3. Postgres stores the news metadata, text, chunks, and vectors.
+4. A question is embedded with the same model and matched against news chunks using pgvector cosine similarity.
+5. The retrieved context is sent to the answer model, which writes a short response with citations.
+
+## Daily 4 PM Ingestion
+
+GitHub Actions runs the ingestion workflow every day at 4:00 PM New York time. The workflow accounts for both EST and EDT, and manual runs bypass the time check.
+
+Add these repository secrets under **GitHub > Settings > Secrets and variables > Actions**:
+
+```text
+SUPABASE_DATABASE_URL=postgresql://...pooler.supabase.com:6543/postgres?sslmode=require
+HF_EMBEDDING_URL=https://YOUR_SPACE.hf.space/embed
+HF_TOKEN=hf_... # required for a private Space
+```
+
+Use the Supabase transaction pooler URL so GitHub's IPv4 runners can connect. The workflow is in `.github/workflows/ingest-daily-news.yml`. Test it immediately from **GitHub > Actions > Ingest daily financial news > Run workflow**.
+
+The chat retrieval paths only consider stories from the current New York calendar day, preventing older but similar articles from leaking into a "what happened today" answer.
+
+## Supabase Migration
+
+The news-only migration empties the old document/vector corpus and drops historical prices. This is destructive by design. After it runs, ingest today's news to seed the new product.
+
+```bash
+supabase link --project-ref gktoboieleghbtsiksdt
+supabase db push
+```
+
+Verify the hosted database afterward:
+
+```sql
+SELECT source_type, COUNT(*) FROM documents GROUP BY source_type;
+SELECT COUNT(*) FROM chunks;
+SELECT to_regclass('public.prices_daily');
+```
+
+The final query should return `NULL`. Ingest current news after applying the migration:
+
+```bash
+export DATABASE_URL="postgresql://..."
+finance-chat ingest --backend pgvector --embedding-provider sentence-transformers
+```
+
+For local sentence-transformers embeddings, install the optional dependency first:
+
+```bash
+pip install -e ".[local-embeddings]"
+```
+
 ## Web App
 
-The Next.js chat UI lives in `web/`.
+The Next.js application lives in `web/`.
 
 ```bash
 cd web
@@ -134,171 +98,55 @@ npm install
 npm run dev
 ```
 
-By default, the web app uses a mock `/api/chat` response so the interface works before the Python API exists. Once the backend API is available, set:
-
-```bash
-BACKEND_API_URL=http://localhost:8000
-```
-
-The frontend will proxy `POST /api/chat` requests to `BACKEND_API_URL/chat`.
-
-For the hosted demo path, Vercel can be the backend API directly. In that setup,
-do not set `BACKEND_API_URL`. Set these Vercel environment variables instead:
+For Vercel-native RAG, configure:
 
 ```text
 SUPABASE_DATABASE_URL=postgresql://...
-HF_EMBEDDING_URL=https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space/embed
-HF_GENERATION_URL=https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space/generate
+HF_EMBEDDING_URL=https://YOUR_SPACE.hf.space/embed
+HF_GENERATION_URL=https://YOUR_SPACE.hf.space/generate
 HF_EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+HF_TOKEN=... # required for a private Space
 ```
 
-The Vercel route embeds the user's question through Hugging Face, queries
-Supabase pgvector, then sends the retrieved chunks to Hugging Face for the final
-answer.
+The Vercel route embeds the question through Hugging Face, retrieves only `news` chunks from Supabase, and sends those chunks to the Hugging Face generation endpoint.
 
 ## Hugging Face Space
 
-The Hugging Face model service lives in `hf-space/`.
-
-Create a Hugging Face Space with:
-
-```text
-SDK: Docker
-Hardware: CPU Basic
-```
-
-Upload or push the contents of `hf-space/`. The Space exposes:
+The Docker Space service lives in `hf-space/` and exposes:
 
 ```text
 POST /embed
 POST /generate
 ```
 
-The default embedding model is `sentence-transformers/all-mpnet-base-v2`, which
-returns 768-dimensional vectors. That matches the current pgvector schema.
-
-Important: query embeddings and stored chunk embeddings must come from the same
-model. If Supabase already contains chunks embedded with Ollama, re-embed them
-with the same sentence-transformers model used by the Hugging Face Space. The
-fastest path is to run the bulk re-embedding locally on your Mac and write the
-new vectors directly to Supabase:
-
-```bash
-pip install -e ".[local-embeddings]"
-
-export DATABASE_URL="postgresql://..."
-
-finance-chat reembed-chunks --embedding-provider sentence-transformers --limit 25
-finance-chat reembed-chunks --embedding-provider sentence-transformers
-```
-
-Use the `--limit 25` run as a smoke test before re-embedding everything.
-At deployed chat time, Vercel calls the Hugging Face Space `/embed` endpoint with
-the same default model, `sentence-transformers/all-mpnet-base-v2`.
+Its default embedding model is `sentence-transformers/all-mpnet-base-v2`. Stored document vectors and query vectors must always use the same embedding model.
 
 ## API
 
-The FastAPI backend exposes the RAG chat service used by the web app.
+Run the Python API locally with:
 
 ```bash
 finance-api
 ```
 
-By default it runs at:
-
-```text
-http://127.0.0.1:8000
-```
-
-Useful endpoints:
+It listens on `http://127.0.0.1:8000` by default.
 
 ```bash
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"message":"what risks did Apple disclose about supply chain and manufacturing?","embedding_provider":"ollama","top_k":5}'
+  -d '{"message":"what happened in markets today?","embedding_provider":"ollama","top_k":8}'
 ```
-
-To connect the web app to the API:
-
-```bash
-cd web
-BACKEND_API_URL=http://127.0.0.1:8000 npm run dev
-```
-
-## Historical Prices
-
-Daily OHLCV prices are stored in Postgres in `prices_daily`. This is structured data, not vector data.
-
-Ingest 10 years of daily bars for the current S&P 500:
-
-```bash
-finance-chat ingest-prices --sp500 --years 10 --user-agent "Your Name your.email@example.com"
-```
-
-Test a small batch first:
-
-```bash
-finance-chat ingest-prices --tickers AAPL,MSFT,NVDA --years 10 --user-agent "Your Name your.email@example.com"
-```
-
-Check the stored rows:
-
-```bash
-docker compose exec postgres psql -U finance_ai -d finance_ai -c "SELECT COUNT(*) FROM prices_daily;"
-docker compose exec postgres psql -U finance_ai -d finance_ai -c "SELECT ticker, MIN(trade_date), MAX(trade_date), COUNT(*) FROM prices_daily GROUP BY ticker ORDER BY ticker LIMIT 20;"
-```
-
-For 500 tickers over 10 years, expect roughly 1.26 million rows. The app estimates storage before ingestion; typical Postgres storage with indexes should be in the hundreds of MB, usually well under 1 GB.
-
-## SEC Filing Backfill
-
-SEC filing chunks and embeddings are stored in pgvector. Ollama provides local embeddings for large backfills.
-
-Install Ollama, then pull the default embedding model:
-
-```bash
-ollama pull nomic-embed-text
-```
-
-The default pgvector embedding provider is `ollama`, using `nomic-embed-text`. If you change `OLLAMA_EMBEDDING_MODEL`, make sure the model returns 768-dimensional vectors or recreate the pgvector schema with a matching dimension.
-
-Ingest one ticker for the past year:
-
-```bash
-finance-chat ingest-sec --tickers AAPL --years 1 --forms 10-K,10-Q --embedding-provider ollama --user-agent "Your Name your.email@example.com"
-```
-
-Test the first 5 current S&P 500 tickers:
-
-```bash
-finance-chat ingest-sec --sp500 --limit-tickers 5 --years 1 --forms 10-K,10-Q --embedding-provider ollama --user-agent "Your Name your.email@example.com"
-```
-
-Run the full current S&P 500 past-year backfill:
-
-```bash
-finance-chat ingest-sec --sp500 --years 1 --forms 10-K,10-Q --embedding-provider ollama --user-agent "Your Name your.email@example.com"
-```
-
-Check filing/vector chunk counts:
-
-```bash
-docker compose exec postgres psql -U finance_ai -d finance_ai -c "SELECT ticker, COUNT(*) FROM documents WHERE source_type = 'filing' GROUP BY ticker ORDER BY ticker LIMIT 20;"
-docker compose exec postgres psql -U finance_ai -d finance_ai -c "SELECT COUNT(*) FROM chunks WHERE source_type = 'filing';"
-```
-
-For current S&P 500 constituents, one year of `10-K` plus `10-Q` is roughly 2,000 filings before missing/delisted/form-calendar quirks.
 
 ## Tests
 
 ```bash
 python3 -m unittest discover -s tests
+cd web && npm run build
 ```
 
-## Next Useful Upgrades
+## Next Steps
 
-- Add earnings call transcripts and 8-K filings.
-- Swap the local lexical index for embeddings and a vector database.
-- Add scheduled daily ingestion.
-- Add ticker/entity extraction so questions automatically pull the right filings.
+- Fetch full article text where publisher terms permit it.
+- Add a short retention policy for stale news.
+- Extract company and ticker entities from each story for filtering.

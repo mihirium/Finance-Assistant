@@ -32,7 +32,6 @@ class LocalModelTests(unittest.TestCase):
                     title="Megacap stocks face valuation pressure",
                     url="https://example.com",
                     text="Apple and Microsoft are discussed in relation to market valuations.",
-                    ticker=None,
                     published_at=None,
                 ),
                 3.2,
@@ -54,7 +53,6 @@ class LocalModelTests(unittest.TestCase):
                     title="SpaceX tender offer values company",
                     url="https://example.com",
                     text="SpaceX is valued by investors based on launch cadence and Starlink growth.",
-                    ticker=None,
                     published_at=None,
                 ),
                 4.0,
@@ -66,11 +64,11 @@ class LocalModelTests(unittest.TestCase):
     def test_ensure_citations_appends_sources_when_missing(self) -> None:
         results = [
             SearchResult(
-                Chunk("1", "doc1", "filing", "AAPL 10-K", "https://example.com/1", "supply risk", "AAPL", None),
+                Chunk("1", "doc1", "news", "Apple supplier update", "https://example.com/1", "supply risk", None),
                 0.9,
             ),
             SearchResult(
-                Chunk("2", "doc2", "filing", "AAPL 10-Q", "https://example.com/2", "manufacturing risk", "AAPL", None),
+                Chunk("2", "doc2", "news", "Apple manufacturing update", "https://example.com/2", "manufacturing risk", None),
                 0.8,
             ),
         ]

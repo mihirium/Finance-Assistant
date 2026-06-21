@@ -7,14 +7,12 @@ export const maxDuration = 300;
 type ChatRequest = {
   message?: string;
   top_k?: number;
-  source_type?: "news" | "filing";
 };
 
 type Source = {
   title: string;
   url: string;
-  ticker: string | null;
-  sourceType: "filing" | "news" | "price";
+  sourceType: "news";
   score: number;
   excerpt: string;
 };
@@ -22,8 +20,7 @@ type Source = {
 type SourceRow = {
   title: string;
   url: string;
-  ticker: string | null;
-  sourceType: "filing" | "news" | "price";
+  sourceType: "news";
   score: string | number;
   excerpt: string;
 };
@@ -64,8 +61,7 @@ export async function POST(request: Request) {
     const sources = await retrieveSources({
       databaseUrl,
       embedding,
-      topK: body.top_k ?? 8,
-      sourceType: body.source_type
+      topK: body.top_k ?? 8
     });
     const answer = await synthesizeAnswer(message, sources);
     return NextResponse.json({ answer, sources });
@@ -83,8 +79,7 @@ async function proxyToPythonBackend(backendUrl: string, body: ChatRequest, messa
       message,
       top_k: body.top_k ?? 8,
       synthesize: true,
-      embedding_provider: "huggingface",
-      source_type: body.source_type
+      embedding_provider: "huggingface"
     })
   });
 
@@ -120,33 +115,34 @@ async function embedQuestion(embeddingUrl: string, question: string) {
 async function retrieveSources({
   databaseUrl,
   embedding,
-  topK,
-  sourceType
+  topK
 }: {
   databaseUrl: string;
   embedding: number[];
   topK: number;
-  sourceType?: "news" | "filing";
 }) {
   const pool = getPool(databaseUrl);
   const vector = `[${embedding.join(",")}]`;
   const limit = Math.max(1, Math.min(topK, 20));
-  const where = sourceType ? "WHERE source_type = $2" : "";
-  const params = sourceType ? [vector, sourceType, vector, limit] : [vector, vector, limit];
+  const params = [vector, vector, limit];
 
   const result = await pool.query<SourceRow>(
     `
     SELECT
       title,
       url,
-      ticker,
       source_type AS "sourceType",
       1 - (embedding <=> $1::vector) AS score,
       left(chunk_text, 900) AS excerpt
     FROM chunks
-    ${where}
-    ORDER BY embedding <=> ${sourceType ? "$3" : "$2"}::vector
-    LIMIT ${sourceType ? "$4" : "$3"}
+    WHERE source_type = 'news'
+      AND published_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York')
+          AT TIME ZONE 'America/New_York'
+      AND published_at < (
+        date_trunc('day', now() AT TIME ZONE 'America/New_York') + interval '1 day'
+      ) AT TIME ZONE 'America/New_York'
+    ORDER BY embedding <=> $2::vector
+    LIMIT $3
     `,
     params
   );
@@ -154,7 +150,6 @@ async function retrieveSources({
   return result.rows.map((row) => ({
     title: row.title,
     url: row.url,
-    ticker: row.ticker,
     sourceType: row.sourceType,
     score: Number(row.score),
     excerpt: row.excerpt
@@ -163,7 +158,7 @@ async function retrieveSources({
 
 async function synthesizeAnswer(question: string, sources: Source[]) {
   if (sources.length === 0) {
-    return "I could not find relevant filing or news context in Supabase for that question yet.";
+    return "I could not find relevant news in Supabase for that question yet.";
   }
 
   const generationUrl = process.env.HF_GENERATION_URL;
@@ -182,7 +177,6 @@ async function synthesizeAnswer(question: string, sources: Source[]) {
       contexts: sources.map((source, index) => ({
         id: index + 1,
         title: source.title,
-        ticker: source.ticker,
         sourceType: source.sourceType,
         url: source.url,
         text: source.excerpt

@@ -3,11 +3,11 @@
 import {
   ArrowUp,
   Bot,
-  Building2,
   Clock3,
   Database,
   FileText,
   LineChart,
+  Newspaper,
   Search,
   User
 } from "lucide-react";
@@ -16,8 +16,7 @@ import { FormEvent, useMemo, useRef, useState } from "react";
 type Source = {
   title: string;
   url: string;
-  ticker?: string;
-  sourceType: "filing" | "news" | "price";
+  sourceType: "news";
   score?: number;
   excerpt?: string;
 };
@@ -30,10 +29,9 @@ type Message = {
 };
 
 const starterQuestions = [
-  "What risks did Apple disclose about supply chain and manufacturing?",
-  "What changed in Apple's latest 10-Q?",
-  "Summarize recent risks for AAPL from filings.",
-  "What context should I know before looking at today's AAPL move?"
+  "What happened in markets today?",
+  "What are the biggest company stories today?",
+  "What themes are driving stocks today?"
 ];
 
 export default function Home() {
@@ -42,7 +40,7 @@ export default function Home() {
       id: "welcome",
       role: "assistant",
       content:
-        "Ask about a company, a filing, or a market move. I will retrieve local pgvector context and answer with citations."
+        "Ask what happened in markets today. I will retrieve current financial news and answer with citations."
     }
   ]);
   const [input, setInput] = useState("");
@@ -117,7 +115,7 @@ export default function Home() {
           </div>
           <div>
             <h1>Finance AI</h1>
-            <p>SEC filings, prices, news</p>
+            <p>Daily financial news</p>
           </div>
         </div>
 
@@ -132,11 +130,11 @@ export default function Home() {
           </div>
           <div className="status-row">
             <span>Embeddings</span>
-            <strong>Ollama</strong>
+            <strong>Hugging Face</strong>
           </div>
           <div className="status-row">
-            <span>Universe</span>
-            <strong>AAPL test</strong>
+            <span>Content</span>
+            <strong>Today&apos;s news</strong>
           </div>
         </section>
 
@@ -146,7 +144,7 @@ export default function Home() {
             <span>Latest Sources</span>
           </div>
           {latestSources.length === 0 ? (
-            <p className="muted">Citations from retrieved filings will appear here.</p>
+            <p className="muted">Citations from retrieved news will appear here.</p>
           ) : (
             <div className="source-list">
               {latestSources.map((source, index) => (
@@ -155,7 +153,7 @@ export default function Home() {
                   <span>
                     <strong>{source.title}</strong>
                     <small>
-                      {source.ticker ?? source.sourceType}
+                      {source.sourceType}
                       {typeof source.score === "number" ? ` · ${source.score.toFixed(2)}` : ""}
                     </small>
                   </span>
@@ -174,12 +172,12 @@ export default function Home() {
           </div>
           <div className="topbar-meta">
             <span>
-              <Building2 size={15} />
-              SEC
+              <Newspaper size={15} />
+              News
             </span>
             <span>
               <Clock3 size={15} />
-              Daily bars
+              Updated daily
             </span>
           </div>
         </header>
@@ -196,7 +194,7 @@ export default function Home() {
                   <div className="citation-strip">
                     {message.sources.slice(0, 4).map((source, index) => (
                       <a key={`${source.url}-${index}`} href={source.url} target="_blank" rel="noreferrer">
-                        [{index + 1}] {source.ticker ?? source.sourceType}
+                        [{index + 1}] {source.sourceType}
                       </a>
                     ))}
                   </div>
@@ -209,7 +207,7 @@ export default function Home() {
               <div className="avatar" aria-hidden="true">
                 <Bot size={18} />
               </div>
-              <div className="message-body loading-text">Retrieving filings and drafting answer...</div>
+              <div className="message-body loading-text">Retrieving today&apos;s news and drafting answer...</div>
             </article>
           ) : null}
         </div>
@@ -228,7 +226,7 @@ export default function Home() {
             ref={inputRef}
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="Ask about filings, risks, prices, or market moves..."
+            placeholder="Ask what happened in markets today..."
             rows={2}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Literal
 
 
-SourceType = Literal["news", "filing"]
+SourceType = Literal["news"]
 
 
 @dataclass(frozen=True)
@@ -16,8 +16,6 @@ class Document:
     url: str
     published_at: datetime | None
     text: str
-    ticker: str | None = None
-    accession_number: str | None = None
 
 
 @dataclass(frozen=True)
@@ -28,7 +26,6 @@ class Chunk:
     title: str
     url: str
     text: str
-    ticker: str | None
     published_at: datetime | None
 
 

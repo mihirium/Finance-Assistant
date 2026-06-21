@@ -22,13 +22,11 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=8, ge=1, le=20)
     synthesize: bool = True
     embedding_provider: EmbeddingProvider = "ollama"
-    source_type: Literal["news", "filing"] | None = None
 
 
 class SourceResponse(BaseModel):
     title: str
     url: str
-    ticker: str | None = None
     sourceType: str
     score: float
     excerpt: str
@@ -65,11 +63,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         embedder=_make_embedder(request.embedding_provider),
     )
     try:
-        results = store.search(
-            request.message,
-            top_k=request.top_k,
-            source_type=request.source_type,
-        )
+        results = store.search(request.message, top_k=request.top_k)
         answer = answer_question(request.message, results, synthesize=request.synthesize)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -88,7 +82,6 @@ def _source_from_result(result: SearchResult) -> SourceResponse:
     return SourceResponse(
         title=chunk.title,
         url=chunk.url,
-        ticker=chunk.ticker,
         sourceType=chunk.source_type,
         score=result.score,
         excerpt=excerpt,

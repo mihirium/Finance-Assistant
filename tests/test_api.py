@@ -10,11 +10,10 @@ class ApiTests(unittest.TestCase):
             Chunk(
                 id="chunk-1",
                 document_id="doc-1",
-                source_type="filing",
-                title="AAPL 10-K",
-                url="https://example.com/aapl",
-                text="supply chain risk " * 40,
-                ticker="AAPL",
+                source_type="news",
+                title="Stocks rally after inflation report",
+                url="https://example.com/markets",
+                text="stocks rallied after inflation cooled " * 40,
                 published_at=None,
             ),
             score=0.75,
@@ -22,8 +21,7 @@ class ApiTests(unittest.TestCase):
 
         source = _source_from_result(result)
 
-        self.assertEqual(source.sourceType, "filing")
-        self.assertEqual(source.ticker, "AAPL")
+        self.assertEqual(source.sourceType, "news")
         self.assertLessEqual(len(source.excerpt), 360)
 
 

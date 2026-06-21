@@ -38,7 +38,6 @@ class LocalVectorIndex:
                         title=document.title,
                         url=document.url,
                         text=text,
-                        ticker=document.ticker,
                         published_at=document.published_at,
                     )
                 )
