@@ -1,0 +1,83 @@
+name: Ingest S&P 500 price snapshots
+
+on:
+  schedule:
+    # 9:30 AM, 12 PM, and 4 PM New York time across EDT and EST.
+    - cron: "30 13 * * 1-5"
+    - cron: "30 14 * * 1-5"
+    - cron: "0 16 * * 1-5"
+    - cron: "0 17 * * 1-5"
+    - cron: "0 20 * * 1-5"
+    - cron: "0 21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      snapshot:
+        description: Price snapshot to capture
+        required: true
+        default: close
+        type: choice
+        options:
+          - open
+          - midday
+          - close
+
+concurrency:
+  group: sp500-price-ingestion
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Select snapshot for New York time
+        id: schedule
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "snapshot=${{ inputs.snapshot }}" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}:$(TZ=America/New_York date +%z)" in
+              "30 13 * * 1-5:-0400"|"30 14 * * 1-5:-0500") snapshot=open ;;
+              "0 16 * * 1-5:-0400"|"0 17 * * 1-5:-0500") snapshot=midday ;;
+              "0 20 * * 1-5:-0400"|"0 21 * * 1-5:-0500") snapshot=close ;;
+              *) snapshot=skip ;;
+            esac
+            if [[ "$snapshot" == "skip" ]]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Check out repository
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ingestion app
+        if: steps.schedule.outputs.run == 'true'
+        run: pip install -e .
+
+      - name: Capture S&P 500 prices
+        if: steps.schedule.outputs.run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        shell: bash
+        run: |
+          : "${DATABASE_URL:?Add the SUPABASE_DATABASE_URL repository secret}"
+          finance-chat ingest-prices \
+            --sp500 \
+            --snapshot "${{ steps.schedule.outputs.snapshot }}" \
+            --date "$(TZ=America/New_York date +%F)" \
+            --user-agent "FinanceAI S&P 500 price ingestion"

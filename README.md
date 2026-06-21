@@ -58,6 +58,26 @@ Use the Supabase transaction pooler URL so GitHub's IPv4 runners can connect. Th
 
 The chat retrieval paths only consider stories from the current New York calendar day, preventing older but similar articles from leaking into a "what happened today" answer.
 
+## S&P 500 Price Snapshots
+
+A second GitHub Actions workflow captures current S&P 500 prices on weekdays at:
+
+```text
+9:30 AM New York time  -> open
+12:00 PM New York time -> midday
+4:00 PM New York time  -> close
+```
+
+These rows live in `price_snapshots`, not pgvector. The table keeps the three snapshots for only the latest successful trading day; a new trading day removes older rows. This needs only the `SUPABASE_DATABASE_URL` repository secret already used by daily news ingestion.
+
+Test a few tickers locally:
+
+```bash
+finance-chat ingest-prices --tickers AAPL,MSFT,NVDA --snapshot midday
+```
+
+Test the hosted job from **GitHub > Actions > Ingest S&P 500 price snapshots > Run workflow** and choose a snapshot type.
+
 ## Supabase Migration
 
 The news-only migration empties the old document/vector corpus and drops historical prices. This is destructive by design. After it runs, ingest today's news to seed the new product.

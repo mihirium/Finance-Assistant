@@ -6,6 +6,7 @@ from datetime import datetime
 from finance_rag.embeddings import DEFAULT_EMBEDDING_DIMENSIONS, OllamaEmbedder
 from finance_rag.index import LocalVectorIndex
 from finance_rag.models import Chunk, Document, SearchResult
+from finance_rag.prices import PriceSnapshot
 
 
 DEFAULT_DATABASE_URL = "postgresql://finance_ai:finance_ai@localhost:5432/finance_ai"
@@ -69,6 +70,29 @@ class PgVectorStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx "
                 "ON chunks USING hnsw (embedding vector_cosine_ops)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS price_snapshots (
+                    ticker TEXT NOT NULL,
+                    market_date DATE NOT NULL,
+                    snapshot_type TEXT NOT NULL CHECK (snapshot_type IN ('open', 'midday', 'close')),
+                    captured_at TIMESTAMPTZ NOT NULL,
+                    price NUMERIC(18, 6) NOT NULL,
+                    day_open NUMERIC(18, 6) NOT NULL,
+                    day_high NUMERIC(18, 6) NOT NULL,
+                    day_low NUMERIC(18, 6) NOT NULL,
+                    previous_close NUMERIC(18, 6),
+                    volume BIGINT NOT NULL,
+                    source TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (ticker, market_date, snapshot_type)
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS price_snapshots_market_date_idx "
+                "ON price_snapshots(market_date)"
             )
 
     def ping(self) -> None:
@@ -183,6 +207,57 @@ class PgVectorStore:
                     if progress_callback:
                         progress_callback(idx, len(rows))
         return len(rows)
+
+    def ingest_price_snapshots(self, snapshots: list[PriceSnapshot]) -> int:
+        if not snapshots:
+            return 0
+
+        psycopg = _load_psycopg()
+        self.init_schema()
+        market_date = snapshots[0].market_date
+        if any(snapshot.market_date != market_date for snapshot in snapshots):
+            raise ValueError("All price snapshots in a batch must have the same market date.")
+
+        with psycopg.connect(self.database_url) as conn:
+            with conn.cursor() as cur:
+                cur.executemany(
+                    """
+                    INSERT INTO price_snapshots (
+                        ticker, market_date, snapshot_type, captured_at, price,
+                        day_open, day_high, day_low, previous_close, volume,
+                        source, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (ticker, market_date, snapshot_type) DO UPDATE SET
+                        captured_at = EXCLUDED.captured_at,
+                        price = EXCLUDED.price,
+                        day_open = EXCLUDED.day_open,
+                        day_high = EXCLUDED.day_high,
+                        day_low = EXCLUDED.day_low,
+                        previous_close = EXCLUDED.previous_close,
+                        volume = EXCLUDED.volume,
+                        source = EXCLUDED.source,
+                        updated_at = now()
+                    """,
+                    [
+                        (
+                            snapshot.ticker,
+                            snapshot.market_date,
+                            snapshot.snapshot_type,
+                            snapshot.captured_at,
+                            snapshot.price,
+                            snapshot.day_open,
+                            snapshot.day_high,
+                            snapshot.day_low,
+                            snapshot.previous_close,
+                            snapshot.volume,
+                            snapshot.source,
+                        )
+                        for snapshot in snapshots
+                    ],
+                )
+            conn.execute("DELETE FROM price_snapshots WHERE market_date < %s", (market_date,))
+        return len(snapshots)
 
     def search(self, query: str, *, top_k: int = 8) -> list[SearchResult]:
         psycopg = _load_psycopg()

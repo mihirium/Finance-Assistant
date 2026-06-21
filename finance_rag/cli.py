@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.error import URLError
 
@@ -9,6 +9,13 @@ from finance_rag.embeddings import HashingEmbedder, HuggingFaceEmbedder, OllamaE
 from finance_rag.index import LocalVectorIndex
 from finance_rag.llm import answer_question
 from finance_rag.pgvector_store import DEFAULT_DATABASE_URL, PgVectorStore
+from finance_rag.prices import (
+    NEW_YORK_TZ,
+    SNAPSHOT_TYPES,
+    fetch_price_snapshots,
+    fetch_sp500_tickers,
+    parse_tickers,
+)
 from finance_rag.sources import fetch_todays_news, save_documents
 
 
@@ -32,6 +39,18 @@ def main() -> None:
     ingest.add_argument("--database-url", default=None)
     ingest.add_argument("--embedding-provider", choices=EMBEDDING_PROVIDERS, default="ollama")
     ingest.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
+
+    prices = subparsers.add_parser("ingest-prices", help="Capture a current-day S&P 500 price snapshot")
+    prices.add_argument("--snapshot", choices=SNAPSHOT_TYPES, required=True)
+    prices.add_argument("--sp500", action="store_true", help="Capture the current S&P 500 constituents")
+    prices.add_argument("--tickers", default="", help="Optional comma-separated tickers")
+    prices.add_argument(
+        "--date",
+        default=datetime.now(NEW_YORK_TZ).date().isoformat(),
+        help="Expected New York market date in YYYY-MM-DD",
+    )
+    prices.add_argument("--database-url", default=None)
+    prices.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
 
     reembed = subparsers.add_parser("reembed-chunks", help="Recompute embeddings for existing pgvector chunks")
     reembed.add_argument("--database-url", default=None)
@@ -60,6 +79,8 @@ def main() -> None:
         _init_db(args)
     elif args.command == "ingest":
         _ingest(args)
+    elif args.command == "ingest-prices":
+        _ingest_prices(args)
     elif args.command == "reembed-chunks":
         _reembed_chunks(args)
     elif args.command == "ask":
@@ -129,6 +150,45 @@ def _reembed_chunks(args: argparse.Namespace) -> None:
     except Exception as exc:
         raise SystemExit(_backend_error_message(exc)) from exc
     print(f"Re-embedded {count:,} chunks with {args.embedding_provider}.")
+
+
+def _ingest_prices(args: argparse.Namespace) -> None:
+    tickers = parse_tickers(args.tickers)
+    if args.sp500:
+        try:
+            tickers.extend(fetch_sp500_tickers(user_agent=args.user_agent))
+        except Exception as exc:
+            raise SystemExit(f"Could not fetch the S&P 500 ticker list: {exc}") from exc
+    tickers = sorted(set(tickers))
+    if not tickers:
+        raise SystemExit("Pass --sp500 or --tickers AAPL,MSFT.")
+
+    market_date = date.fromisoformat(args.date)
+    print(f"Fetching the {args.snapshot} snapshot for {len(tickers):,} tickers on {market_date}.")
+    snapshots, failures = fetch_price_snapshots(
+        tickers,
+        snapshot_type=args.snapshot,
+        market_date=market_date,
+        user_agent=args.user_agent,
+    )
+    minimum_successes = max(1, int(len(tickers) * 0.8))
+    if len(snapshots) < minimum_successes:
+        sample = "\n".join(f"  {failure}" for failure in failures[:10])
+        raise SystemExit(
+            f"Only fetched {len(snapshots):,}/{len(tickers):,} prices; refusing a partial snapshot.\n{sample}"
+        )
+
+    store = PgVectorStore(database_url=args.database_url)
+    try:
+        inserted = store.ingest_price_snapshots(snapshots)
+    except Exception as exc:
+        raise SystemExit(_backend_error_message(exc)) from exc
+
+    print(f"Inserted or updated {inserted:,} {args.snapshot} price snapshots.")
+    if failures:
+        print(f"Skipped {len(failures):,} tickers. First failures:")
+        for failure in failures[:10]:
+            print(f"  {failure}")
 
 
 def _ask(
