@@ -5,6 +5,7 @@ import re
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -20,6 +21,9 @@ NEWS_FEEDS = {
     "cnbc-finance": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
 }
 NEW_YORK_TZ = ZoneInfo("America/New_York")
+MIN_ARTICLE_WORDS = 120
+MAX_ARTICLE_CHARS = 60_000
+ARTICLE_FETCH_WORKERS = 6
 
 
 def _request(url: str, *, user_agent: str, timeout: int = 20) -> str:
@@ -40,6 +44,7 @@ def fetch_todays_news(
     as_of: date,
     user_agent: str,
     feed_urls: dict[str, str] | None = None,
+    fetch_full_text: bool = True,
 ) -> list[Document]:
     feeds = feed_urls or NEWS_FEEDS
     documents: list[Document] = []
@@ -73,7 +78,66 @@ def fetch_todays_news(
                 )
             )
 
-    return _dedupe_documents(documents)
+    documents = _dedupe_documents(documents)
+    if not fetch_full_text or not documents:
+        return documents
+    return _enrich_news_documents(documents, user_agent=user_agent)
+
+
+def _enrich_news_documents(documents: list[Document], *, user_agent: str) -> list[Document]:
+    enriched_by_id: dict[str, Document] = {}
+    with ThreadPoolExecutor(max_workers=ARTICLE_FETCH_WORKERS) as executor:
+        futures = {
+            executor.submit(_enrich_news_document, document, user_agent=user_agent): document
+            for document in documents
+        }
+        for future in as_completed(futures):
+            original = futures[future]
+            try:
+                enriched_by_id[original.id] = future.result()
+            except Exception:
+                enriched_by_id[original.id] = original
+
+    enriched = [enriched_by_id[document.id] for document in documents]
+    full_text_count = sum(1 for original, result in zip(documents, enriched) if result.text != original.text)
+    print(f"Fetched full article text for {full_text_count}/{len(documents)} news items.")
+    return enriched
+
+
+def _enrich_news_document(document: Document, *, user_agent: str) -> Document:
+    html_text = _request(document.url, user_agent=user_agent, timeout=25)
+    article_text = _extract_article_text(html_text, url=document.url)
+    if article_text is None:
+        return document
+    return Document(
+        id=document.id,
+        source_type=document.source_type,
+        title=document.title,
+        url=document.url,
+        published_at=document.published_at,
+        text=article_text[:MAX_ARTICLE_CHARS],
+    )
+
+
+def _extract_article_text(html_text: str, *, url: str) -> str | None:
+    try:
+        from trafilatura import extract
+    except ImportError as exc:
+        raise RuntimeError("Install article extraction support with `pip install -e .`.") from exc
+
+    extracted = extract(
+        html_text,
+        url=url,
+        include_comments=False,
+        include_tables=False,
+        favor_precision=True,
+    )
+    if not extracted:
+        return None
+    text = clean_text(extracted)
+    if len(text.split()) < MIN_ARTICLE_WORDS:
+        return None
+    return text
 
 
 def save_documents(documents: list[Document], path: Path) -> None:

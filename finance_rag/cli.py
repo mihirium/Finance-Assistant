@@ -39,6 +39,11 @@ def main() -> None:
     ingest.add_argument("--database-url", default=None)
     ingest.add_argument("--embedding-provider", choices=EMBEDDING_PROVIDERS, default="ollama")
     ingest.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
+    ingest.add_argument(
+        "--summaries-only",
+        action="store_true",
+        help="Skip full-article extraction and index RSS summaries only",
+    )
 
     prices = subparsers.add_parser("ingest-prices", help="Capture a current-day S&P 500 price snapshot")
     prices.add_argument("--snapshot", choices=SNAPSHOT_TYPES, required=True)
@@ -116,7 +121,11 @@ def _init_db(args: argparse.Namespace) -> None:
 def _ingest(args: argparse.Namespace) -> None:
     data_dir = Path(args.data_dir)
     as_of = date.fromisoformat(args.date)
-    documents = fetch_todays_news(as_of=as_of, user_agent=args.user_agent)
+    documents = fetch_todays_news(
+        as_of=as_of,
+        user_agent=args.user_agent,
+        fetch_full_text=not args.summaries_only,
+    )
 
     news_count = len(documents)
 

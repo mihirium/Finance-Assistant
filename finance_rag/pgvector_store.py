@@ -127,6 +127,12 @@ class PgVectorStore:
                     ),
                 )
 
+            if documents:
+                conn.execute(
+                    "DELETE FROM chunks WHERE document_id = ANY(%s::text[])",
+                    ([document.id for document in documents],),
+                )
+
             for chunk in index.chunks:
                 embedding = self.embedder.embed_document(title=chunk.title, text=chunk.text)
                 conn.execute(

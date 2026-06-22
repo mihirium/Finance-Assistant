@@ -36,8 +36,8 @@ Override it with `DATABASE_URL` or `--database-url`.
 
 ## Architecture
 
-1. `finance-chat ingest` reads financial RSS feeds and keeps stories published on the requested date.
-2. The app chunks each story and computes a 768-dimensional embedding.
+1. `finance-chat ingest` reads financial RSS feeds, keeps stories published on the requested date, and extracts the main article text from each linked page.
+2. The app splits full articles into overlapping 260-word chunks and computes a 768-dimensional embedding for every chunk.
 3. Postgres stores the news metadata, text, chunks, and vectors.
 4. A question is embedded with the same model and matched against news chunks using pgvector cosine similarity.
 5. The retrieved context is sent to the answer model, which writes a short response with citations.
@@ -57,6 +57,8 @@ HF_TOKEN=hf_... # required for a private Space
 Use the Supabase transaction pooler URL so GitHub's IPv4 runners can connect. The workflow is in `.github/workflows/ingest-daily-news.yml`. Test it immediately from **GitHub > Actions > Ingest daily financial news > Run workflow**.
 
 The chat retrieval paths only consider stories from the current New York calendar day, preventing older but similar articles from leaking into a "what happened today" answer.
+
+Publishers that block automated access or return too little article text automatically fall back to the RSS title and summary. Use `--summaries-only` to skip article-page requests during debugging.
 
 ## S&P 500 Price Snapshots
 
@@ -167,6 +169,5 @@ cd web && npm run build
 
 ## Next Steps
 
-- Fetch full article text where publisher terms permit it.
 - Add a short retention policy for stale news.
 - Extract company and ticker entities from each story for filtering.
