@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import Mock, patch
 
-from finance_rag.pgvector_store import _validate_dimensions, _vector_literal
+from finance_rag.pgvector_store import _connect, _validate_dimensions, _vector_literal
 
 
 class PgVectorStoreTests(unittest.TestCase):
@@ -10,6 +11,16 @@ class PgVectorStoreTests(unittest.TestCase):
     def test_validate_dimensions_rejects_bad_values(self) -> None:
         with self.assertRaises(ValueError):
             _validate_dimensions(0)
+
+    def test_connect_disables_automatic_prepared_statements(self) -> None:
+        psycopg = Mock()
+        with patch("finance_rag.pgvector_store._load_psycopg", return_value=psycopg):
+            _connect("postgresql://example")
+
+        psycopg.connect.assert_called_once_with(
+            "postgresql://example",
+            prepare_threshold=None,
+        )
 
 
 if __name__ == "__main__":

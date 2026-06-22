@@ -32,9 +32,8 @@ class PgVectorStore:
         return self._embedder
 
     def init_schema(self) -> None:
-        psycopg = _load_psycopg()
         dimensions = _validate_dimensions(self.dimensions)
-        with psycopg.connect(self.database_url) as conn:
+        with _connect(self.database_url) as conn:
             conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
             conn.execute(
                 """
@@ -96,15 +95,13 @@ class PgVectorStore:
             )
 
     def ping(self) -> None:
-        psycopg = _load_psycopg()
-        with psycopg.connect(self.database_url) as conn:
+        with _connect(self.database_url) as conn:
             conn.execute("SELECT 1").fetchone()
 
     def ingest_documents(self, documents: list[Document]) -> int:
-        psycopg = _load_psycopg()
         self.init_schema()
         index = LocalVectorIndex.from_documents(documents)
-        with psycopg.connect(self.database_url) as conn:
+        with _connect(self.database_url) as conn:
             for document in documents:
                 conn.execute(
                     """
@@ -169,7 +166,6 @@ class PgVectorStore:
         progress_every: int = 25,
         progress_callback: object | None = None,
     ) -> int:
-        psycopg = _load_psycopg()
         filters = []
         params: list[object] = []
         if source_type:
@@ -180,7 +176,7 @@ class PgVectorStore:
         if limit > 0:
             params.append(limit)
 
-        with psycopg.connect(self.database_url) as conn:
+        with _connect(self.database_url) as conn:
             rows = conn.execute(
                 f"""
                 SELECT id, title, chunk_text
@@ -212,13 +208,12 @@ class PgVectorStore:
         if not snapshots:
             return 0
 
-        psycopg = _load_psycopg()
         self.init_schema()
         market_date = snapshots[0].market_date
         if any(snapshot.market_date != market_date for snapshot in snapshots):
             raise ValueError("All price snapshots in a batch must have the same market date.")
 
-        with psycopg.connect(self.database_url) as conn:
+        with _connect(self.database_url) as conn:
             with conn.cursor() as cur:
                 cur.executemany(
                     """
@@ -260,12 +255,11 @@ class PgVectorStore:
         return len(snapshots)
 
     def search(self, query: str, *, top_k: int = 8) -> list[SearchResult]:
-        psycopg = _load_psycopg()
         query_embedding = self.embedder.embed_query(query)
         vector = _vector_literal(query_embedding)
         params = (vector, vector, top_k)
 
-        with psycopg.connect(self.database_url) as conn:
+        with _connect(self.database_url) as conn:
             rows = conn.execute(
                 f"""
                 SELECT
@@ -329,3 +323,10 @@ def _load_psycopg():
     except ImportError as exc:
         raise RuntimeError("Install Postgres support with `pip install -e .` before using --backend pgvector.") from exc
     return psycopg
+
+
+def _connect(database_url: str):
+    # Transaction poolers can reuse a server session across clients, so named
+    # prepared statements may collide. Psycopg's unprepared mode works with
+    # both Supabase pooler URLs and ordinary direct Postgres connections.
+    return _load_psycopg().connect(database_url, prepare_threshold=None)

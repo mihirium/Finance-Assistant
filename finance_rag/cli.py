@@ -283,11 +283,9 @@ def _backend_error_message(exc: Exception) -> str:
 
     return (
         "Could not connect to Postgres/pgvector.\n\n"
-        "Make sure Docker Desktop is running, then start the database:\n"
+        "For Supabase, use the transaction pooler URL with sslmode=require.\n"
+        "For local Postgres, make sure Docker Desktop is running and run:\n"
         "  docker compose up -d\n\n"
-        "Then initialize and ingest:\n"
-        "  finance-chat init-db\n"
-        "  finance-chat ingest --backend pgvector --embedding-provider ollama\n\n"
         f"Original error: {exc}"
     )
 
