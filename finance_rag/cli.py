@@ -44,6 +44,12 @@ def main() -> None:
         action="store_true",
         help="Skip full-article extraction and index RSS summaries only",
     )
+    ingest.add_argument(
+        "--retention-days",
+        type=int,
+        default=30,
+        help="Keep this many New York calendar days in Postgres, default 30",
+    )
 
     prices = subparsers.add_parser("ingest-prices", help="Capture a current-day S&P 500 price snapshot")
     prices.add_argument("--snapshot", choices=SNAPSHOT_TYPES, required=True)
@@ -56,6 +62,12 @@ def main() -> None:
     )
     prices.add_argument("--database-url", default=None)
     prices.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
+    prices.add_argument(
+        "--retention-days",
+        type=int,
+        default=30,
+        help="Keep this many New York calendar days of price snapshots, default 30",
+    )
 
     reembed = subparsers.add_parser("reembed-chunks", help="Recompute embeddings for existing pgvector chunks")
     reembed.add_argument("--database-url", default=None)
@@ -121,11 +133,15 @@ def _init_db(args: argparse.Namespace) -> None:
 def _ingest(args: argparse.Namespace) -> None:
     data_dir = Path(args.data_dir)
     as_of = date.fromisoformat(args.date)
+    if args.retention_days < 1:
+        raise SystemExit("--retention-days must be at least 1")
     documents = fetch_todays_news(
         as_of=as_of,
         user_agent=args.user_agent,
         fetch_full_text=not args.summaries_only,
     )
+    if not documents:
+        raise SystemExit(f"No news items were found for {as_of}; existing data was not changed.")
 
     news_count = len(documents)
 
@@ -133,9 +149,11 @@ def _ingest(args: argparse.Namespace) -> None:
         store = PgVectorStore(database_url=args.database_url, embedder=_make_embedder(args.embedding_provider))
         try:
             chunk_count = store.ingest_documents(documents)
+            pruned_count = store.prune_news(as_of=as_of, retention_days=args.retention_days)
         except Exception as exc:
             raise SystemExit(_backend_error_message(exc)) from exc
         print(f"Indexed {chunk_count} pgvector chunks from {news_count} news items.")
+        print(f"Pruned {pruned_count} news documents outside the {args.retention_days}-day window.")
         return
 
     docs_path = data_dir / "documents.json"
@@ -162,6 +180,8 @@ def _reembed_chunks(args: argparse.Namespace) -> None:
 
 
 def _ingest_prices(args: argparse.Namespace) -> None:
+    if args.retention_days < 1:
+        raise SystemExit("--retention-days must be at least 1")
     tickers = parse_tickers(args.tickers)
     if args.sp500:
         try:
@@ -189,11 +209,15 @@ def _ingest_prices(args: argparse.Namespace) -> None:
 
     store = PgVectorStore(database_url=args.database_url)
     try:
-        inserted = store.ingest_price_snapshots(snapshots)
+        inserted, pruned = store.ingest_price_snapshots(
+            snapshots,
+            retention_days=args.retention_days,
+        )
     except Exception as exc:
         raise SystemExit(_backend_error_message(exc)) from exc
 
     print(f"Inserted or updated {inserted:,} {args.snapshot} price snapshots.")
+    print(f"Pruned {pruned:,} price snapshots outside the {args.retention_days}-day window.")
     if failures:
         print(f"Skipped {len(failures):,} tickers. First failures:")
         for failure in failures[:10]:

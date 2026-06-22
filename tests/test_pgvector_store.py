@@ -1,7 +1,14 @@
 import unittest
+from datetime import date
 from unittest.mock import Mock, patch
 
-from finance_rag.pgvector_store import _connect, _validate_dimensions, _vector_literal
+from finance_rag.pgvector_store import (
+    _connect,
+    _news_retention_cutoff,
+    _price_retention_cutoff,
+    _validate_dimensions,
+    _vector_literal,
+)
 
 
 class PgVectorStoreTests(unittest.TestCase):
@@ -21,6 +28,30 @@ class PgVectorStoreTests(unittest.TestCase):
             "postgresql://example",
             prepare_threshold=None,
         )
+
+    def test_news_retention_cutoff_keeps_thirty_calendar_dates(self) -> None:
+        cutoff = _news_retention_cutoff(
+            as_of=date(2026, 6, 21),
+            retention_days=30,
+        )
+
+        self.assertEqual(cutoff.isoformat(), "2026-05-23T00:00:00-04:00")
+
+    def test_news_retention_rejects_nonpositive_window(self) -> None:
+        with self.assertRaises(ValueError):
+            _news_retention_cutoff(as_of=date(2026, 6, 21), retention_days=0)
+
+    def test_price_retention_cutoff_keeps_thirty_calendar_dates(self) -> None:
+        cutoff = _price_retention_cutoff(
+            market_date=date(2026, 6, 22),
+            retention_days=30,
+        )
+
+        self.assertEqual(cutoff, date(2026, 5, 24))
+
+    def test_price_retention_rejects_nonpositive_window(self) -> None:
+        with self.assertRaises(ValueError):
+            _price_retention_cutoff(market_date=date(2026, 6, 22), retention_days=0)
 
 
 if __name__ == "__main__":

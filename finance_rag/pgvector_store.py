@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date, datetime, time as datetime_time, timedelta
+from zoneinfo import ZoneInfo
 
 from finance_rag.embeddings import DEFAULT_EMBEDDING_DIMENSIONS, OllamaEmbedder
 from finance_rag.index import LocalVectorIndex
@@ -10,6 +11,7 @@ from finance_rag.prices import PriceSnapshot
 
 
 DEFAULT_DATABASE_URL = "postgresql://finance_ai:finance_ai@localhost:5432/finance_ai"
+NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
 class PgVectorStore:
@@ -210,12 +212,34 @@ class PgVectorStore:
                         progress_callback(idx, len(rows))
         return len(rows)
 
-    def ingest_price_snapshots(self, snapshots: list[PriceSnapshot]) -> int:
+    def prune_news(self, *, as_of: date, retention_days: int) -> int:
+        cutoff = _news_retention_cutoff(as_of=as_of, retention_days=retention_days)
+        with _connect(self.database_url) as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM documents
+                WHERE source_type = 'news'
+                  AND published_at < %s
+                """,
+                (cutoff,),
+            )
+            return cursor.rowcount
+
+    def ingest_price_snapshots(
+        self,
+        snapshots: list[PriceSnapshot],
+        *,
+        retention_days: int = 30,
+    ) -> tuple[int, int]:
         if not snapshots:
-            return 0
+            return 0, 0
 
         self.init_schema()
         market_date = snapshots[0].market_date
+        cutoff_date = _price_retention_cutoff(
+            market_date=market_date,
+            retention_days=retention_days,
+        )
         if any(snapshot.market_date != market_date for snapshot in snapshots):
             raise ValueError("All price snapshots in a batch must have the same market date.")
 
@@ -257,8 +281,9 @@ class PgVectorStore:
                         for snapshot in snapshots
                     ],
                 )
-            conn.execute("DELETE FROM price_snapshots WHERE market_date < %s", (market_date,))
-        return len(snapshots)
+            cursor = conn.execute("DELETE FROM price_snapshots WHERE market_date < %s", (cutoff_date,))
+            pruned_count = cursor.rowcount
+        return len(snapshots), pruned_count
 
     def search(self, query: str, *, top_k: int = 8) -> list[SearchResult]:
         query_embedding = self.embedder.embed_query(query)
@@ -321,6 +346,19 @@ def _coerce_datetime(value: object) -> datetime | None:
     if value is None or isinstance(value, datetime):
         return value
     raise TypeError(f"Expected datetime or None, got {type(value)!r}")
+
+
+def _news_retention_cutoff(*, as_of: date, retention_days: int) -> datetime:
+    if retention_days < 1:
+        raise ValueError("retention_days must be at least 1")
+    first_kept_date = as_of - timedelta(days=retention_days - 1)
+    return datetime.combine(first_kept_date, datetime_time.min, tzinfo=NEW_YORK_TZ)
+
+
+def _price_retention_cutoff(*, market_date: date, retention_days: int) -> date:
+    if retention_days < 1:
+        raise ValueError("retention_days must be at least 1")
+    return market_date - timedelta(days=retention_days - 1)
 
 
 def _load_psycopg():

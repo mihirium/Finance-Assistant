@@ -44,7 +44,7 @@ Override it with `DATABASE_URL` or `--database-url`.
 
 ## Daily 4 PM Ingestion
 
-GitHub Actions runs the ingestion workflow every day at 4:00 PM New York time. The workflow accounts for both EST and EDT, and manual runs bypass the time check.
+GitHub Actions runs the ingestion workflow every day at 4:00 PM New York time. The workflow accounts for both EST and EDT, and manual runs bypass the time check. It combines Yahoo Finance, two MarketWatch feeds, seven CNBC topic feeds, and business coverage from the New York Times, BBC, NPR, and The Guardian, then deduplicates articles by canonical URL.
 
 Add these repository secrets under **GitHub > Settings > Secrets and variables > Actions**:
 
@@ -60,6 +60,8 @@ The chat retrieval paths only consider stories from the current New York calenda
 
 Publishers that block automated access or return too little article text automatically fall back to the RSS title and summary. Use `--summaries-only` to skip article-page requests during debugging.
 
+Postgres retains 30 New York calendar days by default. Each successful ingestion removes older news documents and their cascading chunks. Override the window with `--retention-days`; an empty or failed feed run never triggers pruning.
+
 ## S&P 500 Price Snapshots
 
 A second GitHub Actions workflow captures current S&P 500 prices on weekdays at:
@@ -70,7 +72,7 @@ A second GitHub Actions workflow captures current S&P 500 prices on weekdays at:
 4:00 PM New York time  -> close
 ```
 
-These rows live in `price_snapshots`, not pgvector. The table keeps the three snapshots for only the latest successful trading day; a new trading day removes older rows. This needs only the `SUPABASE_DATABASE_URL` repository secret already used by daily news ingestion.
+These rows live in `price_snapshots`, not pgvector. The table keeps a rolling 30 New York calendar-day window, including all three snapshots for each trading day, and deletes older rows after every successful price ingestion. Override the window with `--retention-days`. This needs only the `SUPABASE_DATABASE_URL` repository secret already used by daily news ingestion.
 
 Test a few tickers locally:
 
@@ -169,5 +171,4 @@ cd web && npm run build
 
 ## Next Steps
 
-- Add a short retention policy for stale news.
 - Extract company and ticker entities from each story for filtering.

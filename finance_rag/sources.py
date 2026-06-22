@@ -18,7 +18,18 @@ from finance_rag.text import clean_text
 NEWS_FEEDS = {
     "yahoo-finance": "https://finance.yahoo.com/news/rssindex",
     "marketwatch-top": "https://feeds.content.dowjones.io/public/rss/mw_topstories",
+    "marketwatch-realtime": "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines",
+    "cnbc-top": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
+    "cnbc-business": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10001147",
     "cnbc-finance": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664",
+    "cnbc-earnings": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839135",
+    "cnbc-economy": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258",
+    "cnbc-investing": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
+    "cnbc-market-insider": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20409666",
+    "nyt-business": "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",
+    "bbc-business": "https://feeds.bbci.co.uk/news/business/rss.xml",
+    "npr-business": "https://feeds.npr.org/1006/rss.xml",
+    "guardian-business": "https://www.theguardian.com/us/business/rss",
 }
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 MIN_ARTICLE_WORDS = 120
