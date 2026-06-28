@@ -58,7 +58,5 @@ jobs:
           : "${DATABASE_URL:?Add the SUPABASE_DATABASE_URL repository secret}"
           : "${HF_EMBEDDING_URL:?Add the HF_EMBEDDING_URL repository secret}"
           finance-chat ingest \
-            --backend pgvector \
-            --embedding-provider huggingface \
             --date "$(TZ=America/New_York date +%F)" \
             --user-agent "FinanceAI daily news ingestion"

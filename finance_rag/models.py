@@ -27,9 +27,3 @@ class Chunk:
     url: str
     text: str
     published_at: datetime | None
-
-
-@dataclass(frozen=True)
-class SearchResult:
-    chunk: Chunk
-    score: float

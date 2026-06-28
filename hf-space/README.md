@@ -54,8 +54,6 @@ HF_GENERATION_URL=https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space/generate
 SUPABASE_DATABASE_URL=postgresql://...
 ```
 
-Do not set `BACKEND_API_URL` if Vercel should be the REST backend.
-
 ## Local Test
 
 ```bash
@@ -74,5 +72,5 @@ curl -X POST http://127.0.0.1:7860/embed \
 ```bash
 curl -X POST http://127.0.0.1:7860/generate \
   -H "Content-Type: application/json" \
-  -d '{"question":"What risks did Apple disclose?","contexts":[{"id":1,"title":"AAPL 10-K","text":"Apple relies on single or limited sources for critical components."}]}'
+  -d '{"question":"What moved markets today?","contexts":[{"id":1,"title":"Stocks rally after inflation report","text":"Major indexes rose after inflation came in below expectations."}]}'
 ```

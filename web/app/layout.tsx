@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Finance AI",
-  description: "RAG chat grounded in daily financial news"
+  description: "Daily market close emails with a news-grounded finance assistant"
 };
 
 export default function RootLayout({

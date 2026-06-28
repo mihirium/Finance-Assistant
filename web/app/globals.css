@@ -34,6 +34,7 @@ body {
 }
 
 button,
+input,
 textarea {
   font: inherit;
 }
@@ -43,10 +44,146 @@ a {
   text-decoration: none;
 }
 
+.site-shell {
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+.signup-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(340px, 0.85fr);
+  gap: 36px;
+  align-items: end;
+  border-bottom: 1px solid var(--line);
+  background: #ffffff;
+  padding: 44px clamp(22px, 5vw, 72px) 38px;
+}
+
+.hero-copy {
+  max-width: 780px;
+}
+
+.hero-brand {
+  margin-bottom: 28px;
+}
+
+.hero-copy h2 {
+  max-width: 760px;
+  margin: 0;
+  font-size: clamp(38px, 6vw, 72px);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.hero-lede {
+  max-width: 680px;
+  margin: 20px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.hero-points {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.hero-points span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.signup-form {
+  border: 1px solid var(--line);
+  background: #f9fbfb;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.signup-form label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.signup-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  gap: 10px;
+}
+
+.email-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 48px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  padding: 0 12px;
+  color: var(--muted);
+}
+
+.email-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.email-field input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.signup-controls button {
+  min-height: 48px;
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.signup-controls button:disabled {
+  cursor: not-allowed;
+  background: #9eb5b1;
+}
+
+.signup-hint,
+.signup-message {
+  margin: 11px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.signup-message.success {
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.signup-message.error {
+  color: #b42318;
+  font-weight: 700;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
-  min-height: 100vh;
+  min-height: 720px;
 }
 
 .sidebar {
@@ -371,6 +508,17 @@ a {
 }
 
 @media (max-width: 960px) {
+  .signup-hero {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    padding-top: 28px;
+  }
+
+  .hero-copy h2 {
+    font-size: 44px;
+    line-height: 1.04;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -385,6 +533,26 @@ a {
 }
 
 @media (max-width: 620px) {
+  .signup-hero {
+    padding: 22px 14px 24px;
+  }
+
+  .hero-brand {
+    margin-bottom: 20px;
+  }
+
+  .hero-copy h2 {
+    font-size: 38px;
+  }
+
+  .hero-lede {
+    font-size: 16px;
+  }
+
+  .signup-controls {
+    grid-template-columns: 1fr;
+  }
+
   .topbar,
   .messages,
   .starter-row,

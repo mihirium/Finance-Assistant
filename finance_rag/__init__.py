@@ -1,4 +1,4 @@
-"""Finance RAG CLI package."""
+"""Finance AI ingestion package."""
 
 __all__ = ["__version__"]
 

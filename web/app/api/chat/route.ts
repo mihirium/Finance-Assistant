@@ -38,11 +38,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Message is required" }, { status: 400 });
   }
 
-  const backendUrl = process.env.BACKEND_API_URL;
-  if (backendUrl) {
-    return proxyToPythonBackend(backendUrl, body, message);
-  }
-
   const databaseUrl = process.env.SUPABASE_DATABASE_URL ?? process.env.DATABASE_URL;
   const embeddingUrl = process.env.HF_EMBEDDING_URL;
 
@@ -69,22 +64,6 @@ export async function POST(request: Request) {
     const detail = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json({ error: "Chat request failed", detail }, { status: 500 });
   }
-}
-
-async function proxyToPythonBackend(backendUrl: string, body: ChatRequest, message: string) {
-  const response = await fetch(`${backendUrl.replace(/\/$/, "")}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      message,
-      top_k: body.top_k ?? 8,
-      synthesize: true,
-      embedding_provider: "huggingface"
-    })
-  });
-
-  const data = await response.json();
-  return NextResponse.json(data, { status: response.status });
 }
 
 async function embedQuestion(embeddingUrl: string, question: string) {

@@ -1,0 +1,80 @@
+name: Send daily market email
+
+on:
+  schedule:
+    # 4:30 PM New York time across EDT and EST.
+    - cron: "30 20 * * *"
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print and log a dry run instead of sending
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: daily-market-email
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Select New York close window
+        id: schedule
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}:$(TZ=America/New_York date +%z)" in
+              "30 20 * * *:-0400"|"30 21 * * *:-0500") echo "run=true" >> "$GITHUB_OUTPUT" ;;
+              *) echo "run=false" >> "$GITHUB_OUTPUT" ;;
+            esac
+          fi
+
+      - name: Check out repository
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.schedule.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ingestion app
+        if: steps.schedule.outputs.run == 'true'
+        run: pip install -e .
+
+      - name: Send market email
+        if: steps.schedule.outputs.run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          HF_GENERATION_URL: ${{ secrets.HF_GENERATION_URL }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          MARKET_EMAIL_FROM: ${{ secrets.MARKET_EMAIL_FROM }}
+          MARKET_EMAIL_REPLY_TO: ${{ secrets.MARKET_EMAIL_REPLY_TO }}
+          MARKET_EMAIL_APP_URL: ${{ secrets.MARKET_EMAIL_APP_URL }}
+        shell: bash
+        run: |
+          : "${DATABASE_URL:?Add the SUPABASE_DATABASE_URL repository secret}"
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            finance-chat send-market-email \
+              --date "$(TZ=America/New_York date +%F)" \
+              --dry-run
+          else
+            : "${RESEND_API_KEY:?Add the RESEND_API_KEY repository secret}"
+            : "${MARKET_EMAIL_FROM:?Add the MARKET_EMAIL_FROM repository secret}"
+            finance-chat send-market-email \
+              --date "$(TZ=America/New_York date +%F)"
+          fi

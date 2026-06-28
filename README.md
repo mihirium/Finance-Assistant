@@ -1,115 +1,101 @@
 # Finance AI
 
-A news-first RAG assistant for asking what happened in financial markets today. It retrieves same-day reporting, searches it with pgvector, and produces cited answers with local or Hugging Face models.
+Finance AI is a news-first market assistant. Scheduled jobs ingest current financial reporting and S&P 500 price snapshots into Supabase; the Next.js app retrieves same-day pgvector context and asks a private Hugging Face Space to write cited answers.
 
-The project intentionally does not store SEC filings or historical price bars.
+## Architecture
 
-## Local Quick Start
+```text
+GitHub Actions -> Python ingestion -> Supabase Postgres/pgvector
+User -> Next.js on Vercel -> Supabase retrieval -> Hugging Face -> cited answer
+GitHub Actions -> Python email job -> Resend -> subscribed users
+```
+
+The Python package is ingestion-only. Vercel owns the chat API, Supabase migrations own the schema, and `hf-space/` owns embedding and generation inference.
+
+## Scheduled Ingestion
+
+`.github/workflows/ingest-daily-news.yml` runs every day at 4:00 PM New York time. It:
+
+- Reads 15 finance and business RSS feeds.
+- Deduplicates canonical article URLs.
+- Extracts full article text where available, with RSS-summary fallback.
+- Splits articles into overlapping 260-word chunks.
+- Embeds every chunk with `sentence-transformers/all-mpnet-base-v2`.
+- Stores documents and vectors in Supabase and retains 30 calendar days.
+
+`.github/workflows/ingest-sp500-prices.yml` runs on weekdays at 9:30 AM, 12:00 PM, and 4:00 PM New York time. It stores `open`, `midday`, and `close` snapshots for current S&P 500 constituents and retains 30 calendar days.
+
+`.github/workflows/send-market-email.yml` runs every day at 4:30 PM New York time. It reads same-day news, close price movers, and active `email_subscribers`, generates a three-paragraph market summary, and sends it by email.
+
+All scheduled workflows account for EST and EDT.
+
+## Required Secrets
+
+Add these under **GitHub > Settings > Secrets and variables > Actions**:
+
+```text
+SUPABASE_DATABASE_URL=postgresql://...pooler.supabase.com:6543/postgres?sslmode=require
+HF_EMBEDDING_URL=https://YOUR_SPACE.hf.space/embed
+HF_GENERATION_URL=https://YOUR_SPACE.hf.space/generate
+HF_TOKEN=hf_...
+RESEND_API_KEY=re_...
+MARKET_EMAIL_FROM=Finance AI <summary@yourdomain.com>
+MARKET_EMAIL_REPLY_TO=optional-reply@yourdomain.com
+MARKET_EMAIL_APP_URL=https://your-vercel-app.vercel.app
+```
+
+Use the Supabase transaction pooler URL so GitHub's IPv4 runners can connect.
+
+## Ingestion CLI
 
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
 
-docker compose up -d
-finance-chat init-db
+export DATABASE_URL="postgresql://..."
+export HF_EMBEDDING_URL="https://YOUR_SPACE.hf.space/embed"
+export HF_TOKEN="hf_..."
 
-ollama pull nomic-embed-text
-finance-chat ingest --backend pgvector --embedding-provider ollama
-finance-chat chat --backend pgvector --embedding-provider ollama
+finance-chat ingest
+finance-chat ingest-prices --sp500 --snapshot close
+finance-chat send-market-email --dry-run
 ```
 
-Use `--date YYYY-MM-DD` to ingest news for a specific date. Without it, `ingest` uses today.
+Useful options:
 
 ```bash
-finance-chat ingest --backend pgvector --embedding-provider ollama --date 2026-06-20
-finance-chat ask --backend pgvector --embedding-provider ollama "what happened in markets today?"
-```
-
-The default local database URL is:
-
-```text
-postgresql://finance_ai:finance_ai@localhost:5432/finance_ai
-```
-
-Override it with `DATABASE_URL` or `--database-url`.
-
-## Architecture
-
-1. `finance-chat ingest` reads financial RSS feeds, keeps stories published on the requested date, and extracts the main article text from each linked page.
-2. The app splits full articles into overlapping 260-word chunks and computes a 768-dimensional embedding for every chunk.
-3. Postgres stores the news metadata, text, chunks, and vectors.
-4. A question is embedded with the same model and matched against news chunks using pgvector cosine similarity.
-5. The retrieved context is sent to the answer model, which writes a short response with citations.
-
-## Daily 4 PM Ingestion
-
-GitHub Actions runs the ingestion workflow every day at 4:00 PM New York time. The workflow accounts for both EST and EDT, and manual runs bypass the time check. It combines Yahoo Finance, two MarketWatch feeds, seven CNBC topic feeds, and business coverage from the New York Times, BBC, NPR, and The Guardian, then deduplicates articles by canonical URL.
-
-Add these repository secrets under **GitHub > Settings > Secrets and variables > Actions**:
-
-```text
-SUPABASE_DATABASE_URL=postgresql://...pooler.supabase.com:6543/postgres?sslmode=require
-HF_EMBEDDING_URL=https://YOUR_SPACE.hf.space/embed
-HF_TOKEN=hf_... # required for a private Space
-```
-
-Use the Supabase transaction pooler URL so GitHub's IPv4 runners can connect. The workflow is in `.github/workflows/ingest-daily-news.yml`. Test it immediately from **GitHub > Actions > Ingest daily financial news > Run workflow**.
-
-The chat retrieval paths only consider stories from the current New York calendar day, preventing older but similar articles from leaking into a "what happened today" answer.
-
-Publishers that block automated access or return too little article text automatically fall back to the RSS title and summary. Use `--summaries-only` to skip article-page requests during debugging.
-
-Postgres retains 30 New York calendar days by default. Each successful ingestion removes older news documents and their cascading chunks. Override the window with `--retention-days`; an empty or failed feed run never triggers pruning.
-
-## S&P 500 Price Snapshots
-
-A second GitHub Actions workflow captures current S&P 500 prices on weekdays at:
-
-```text
-9:30 AM New York time  -> open
-12:00 PM New York time -> midday
-4:00 PM New York time  -> close
-```
-
-These rows live in `price_snapshots`, not pgvector. The table keeps a rolling 30 New York calendar-day window, including all three snapshots for each trading day, and deletes older rows after every successful price ingestion. Override the window with `--retention-days`. This needs only the `SUPABASE_DATABASE_URL` repository secret already used by daily news ingestion.
-
-Test a few tickers locally:
-
-```bash
+finance-chat ingest --date 2026-06-21 --retention-days 30
+finance-chat ingest --summaries-only
 finance-chat ingest-prices --tickers AAPL,MSFT,NVDA --snapshot midday
+finance-chat send-market-email --date 2026-06-21 --limit 5
 ```
 
-Test the hosted job from **GitHub > Actions > Ingest S&P 500 price snapshots > Run workflow** and choose a snapshot type.
+## Supabase
 
-## Supabase Migration
-
-The news-only migration empties the old document/vector corpus and drops historical prices. This is destructive by design. After it runs, ingest today's news to seed the new product.
+Schema changes live in `supabase/migrations/`. Apply pending migrations with:
 
 ```bash
 supabase link --project-ref gktoboieleghbtsiksdt
 supabase db push
 ```
 
-Verify the hosted database afterward:
+Primary tables:
+
+- `documents`: source article metadata and full extracted text.
+- `chunks`: retrieval text and 768-dimensional embeddings.
+- `price_snapshots`: structured S&P 500 open, midday, and close observations.
+- `email_subscribers`: users who should receive the daily market email.
+- `market_email_deliveries`: delivery log for sent, failed, and dry-run summaries.
+
+Do not delete applied migration files; Supabase uses them as migration history.
+
+Add a subscriber manually while the signup UI is still under construction:
 
 ```sql
-SELECT source_type, COUNT(*) FROM documents GROUP BY source_type;
-SELECT COUNT(*) FROM chunks;
-SELECT to_regclass('public.prices_daily');
-```
-
-The final query should return `NULL`. Ingest current news after applying the migration:
-
-```bash
-export DATABASE_URL="postgresql://..."
-finance-chat ingest --backend pgvector --embedding-provider sentence-transformers
-```
-
-For local sentence-transformers embeddings, install the optional dependency first:
-
-```bash
-pip install -e ".[local-embeddings]"
+INSERT INTO email_subscribers (email)
+VALUES ('you@example.com')
+ON CONFLICT (email) DO UPDATE SET subscribed = true, updated_at = now();
 ```
 
 ## Web App
@@ -122,53 +108,32 @@ npm install
 npm run dev
 ```
 
-For Vercel-native RAG, configure:
+Vercel environment variables:
 
 ```text
 SUPABASE_DATABASE_URL=postgresql://...
 HF_EMBEDDING_URL=https://YOUR_SPACE.hf.space/embed
 HF_GENERATION_URL=https://YOUR_SPACE.hf.space/generate
 HF_EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
-HF_TOKEN=... # required for a private Space
+HF_TOKEN=hf_...
 ```
 
-The Vercel route embeds the question through Hugging Face, retrieves only `news` chunks from Supabase, and sends those chunks to the Hugging Face generation endpoint.
+The Vercel route embeds the question, retrieves current-day news chunks from Supabase, and sends those chunks to Hugging Face for answer generation.
 
 ## Hugging Face Space
 
-The Docker Space service lives in `hf-space/` and exposes:
+The Docker Space in `hf-space/` exposes:
 
 ```text
 POST /embed
 POST /generate
 ```
 
-Its default embedding model is `sentence-transformers/all-mpnet-base-v2`. Stored document vectors and query vectors must always use the same embedding model.
+Stored document vectors and live query vectors must always use the same embedding model.
 
-## API
-
-Run the Python API locally with:
-
-```bash
-finance-api
-```
-
-It listens on `http://127.0.0.1:8000` by default.
-
-```bash
-curl http://127.0.0.1:8000/health
-curl -X POST http://127.0.0.1:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"what happened in markets today?","embedding_provider":"ollama","top_k":8}'
-```
-
-## Tests
+## Verification
 
 ```bash
 python3 -m unittest discover -s tests
 cd web && npm run build
 ```
-
-## Next Steps
-
-- Extract company and ticker entities from each story for filtering.

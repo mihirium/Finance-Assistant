@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import urllib.parse
 import urllib.request
@@ -8,7 +7,6 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from email.utils import parsedate_to_datetime
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from finance_rag.models import Document
@@ -149,26 +147,6 @@ def _extract_article_text(html_text: str, *, url: str) -> str | None:
     if len(text.split()) < MIN_ARTICLE_WORDS:
         return None
     return text
-
-
-def save_documents(documents: list[Document], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    rows = []
-    for document in documents:
-        row = document.__dict__.copy()
-        row["published_at"] = document.published_at.isoformat() if document.published_at else None
-        rows.append(row)
-    path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-
-
-def load_documents(path: Path) -> list[Document]:
-    rows = json.loads(path.read_text(encoding="utf-8"))
-    documents = []
-    for row in rows:
-        published_at = row.get("published_at")
-        row["published_at"] = datetime.fromisoformat(published_at) if published_at else None
-        documents.append(Document(**row))
-    return documents
 
 
 def _parse_rss_date(value: str | None) -> datetime | None:

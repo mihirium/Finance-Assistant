@@ -4,6 +4,8 @@ import html
 import re
 from collections.abc import Iterable
 
+from finance_rag.models import Chunk, Document
+
 
 TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9$.-]{1,}")
 TAG_RE = re.compile(r"<[^>]+>")
@@ -38,3 +40,21 @@ def chunk_text(
         if end == len(words):
             break
         start = max(end - overlap_words, start + 1)
+
+
+def chunk_documents(documents: list[Document]) -> list[Chunk]:
+    chunks: list[Chunk] = []
+    for document in documents:
+        for index, text in enumerate(chunk_text(document.text)):
+            chunks.append(
+                Chunk(
+                    id=f"{document.id}:{index}",
+                    document_id=document.id,
+                    source_type=document.source_type,
+                    title=document.title,
+                    url=document.url,
+                    text=text,
+                    published_at=document.published_at,
+                )
+            )
+    return chunks

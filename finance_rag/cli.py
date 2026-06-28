@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import date, datetime
-from pathlib import Path
-from urllib.error import URLError
 
-from finance_rag.embeddings import HashingEmbedder, HuggingFaceEmbedder, OllamaEmbedder, SentenceTransformersEmbedder
-from finance_rag.index import LocalVectorIndex
-from finance_rag.llm import answer_question
-from finance_rag.pgvector_store import DEFAULT_DATABASE_URL, PgVectorStore
+from finance_rag.email_summary import build_market_email, send_resend_email
+from finance_rag.embeddings import HuggingFaceEmbedder
+from finance_rag.pgvector_store import PgVectorStore
 from finance_rag.prices import (
     NEW_YORK_TZ,
     SNAPSHOT_TYPES,
@@ -16,28 +14,23 @@ from finance_rag.prices import (
     fetch_sp500_tickers,
     parse_tickers,
 )
-from finance_rag.sources import fetch_todays_news, save_documents
+from finance_rag.sources import fetch_todays_news
 
 
-DEFAULT_DATA_DIR = Path(".finance_rag")
 DEFAULT_USER_AGENT = "FinanceAI/0.1 contact@example.com"
-BACKENDS = ("local", "pgvector")
-EMBEDDING_PROVIDERS = ("ollama", "huggingface", "sentence-transformers", "hashing")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Finance RAG chatbot CLI")
+    parser = argparse.ArgumentParser(description="Finance AI ingestion service")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_db = subparsers.add_parser("init-db", help="Create Postgres/pgvector tables")
-    init_db.add_argument("--database-url", default=None)
-
-    ingest = subparsers.add_parser("ingest", help="Fetch and index today's financial news")
-    ingest.add_argument("--date", default=date.today().isoformat(), help="News date in YYYY-MM-DD, default today")
-    ingest.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
-    ingest.add_argument("--backend", choices=BACKENDS, default="local")
+    ingest = subparsers.add_parser("ingest", help="Fetch, embed, and store today's financial news")
+    ingest.add_argument(
+        "--date",
+        default=datetime.now(NEW_YORK_TZ).date().isoformat(),
+        help="New York news date in YYYY-MM-DD, default today",
+    )
     ingest.add_argument("--database-url", default=None)
-    ingest.add_argument("--embedding-provider", choices=EMBEDDING_PROVIDERS, default="ollama")
     ingest.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     ingest.add_argument(
         "--summaries-only",
@@ -51,9 +44,9 @@ def main() -> None:
         help="Keep this many New York calendar days in Postgres, default 30",
     )
 
-    prices = subparsers.add_parser("ingest-prices", help="Capture a current-day S&P 500 price snapshot")
+    prices = subparsers.add_parser("ingest-prices", help="Capture an S&P 500 price snapshot")
     prices.add_argument("--snapshot", choices=SNAPSHOT_TYPES, required=True)
-    prices.add_argument("--sp500", action="store_true", help="Capture the current S&P 500 constituents")
+    prices.add_argument("--sp500", action="store_true", help="Capture current S&P 500 constituents")
     prices.add_argument("--tickers", default="", help="Optional comma-separated tickers")
     prices.add_argument(
         "--date",
@@ -69,72 +62,35 @@ def main() -> None:
         help="Keep this many New York calendar days of price snapshots, default 30",
     )
 
-    reembed = subparsers.add_parser("reembed-chunks", help="Recompute embeddings for existing pgvector chunks")
-    reembed.add_argument("--database-url", default=None)
-    reembed.add_argument("--embedding-provider", choices=EMBEDDING_PROVIDERS, default="huggingface")
-    reembed.add_argument("--limit", type=int, default=0, help="Limit chunks for a test run")
-
-    ask = subparsers.add_parser("ask", help="Ask one question against the local RAG index")
-    ask.add_argument("question")
-    ask.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
-    ask.add_argument("--backend", choices=BACKENDS, default="local")
-    ask.add_argument("--database-url", default=None)
-    ask.add_argument("--embedding-provider", choices=EMBEDDING_PROVIDERS, default="ollama")
-    ask.add_argument("--top-k", type=int, default=8)
-    ask.add_argument("--no-synthesis", action="store_true", help="Print retrieved passages instead of a synthesized answer")
-
-    chat = subparsers.add_parser("chat", help="Start an interactive finance chat")
-    chat.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR))
-    chat.add_argument("--backend", choices=BACKENDS, default="local")
-    chat.add_argument("--database-url", default=None)
-    chat.add_argument("--embedding-provider", choices=EMBEDDING_PROVIDERS, default="ollama")
-    chat.add_argument("--top-k", type=int, default=8)
-    chat.add_argument("--no-synthesis", action="store_true", help="Print retrieved passages instead of a synthesized answer")
+    email = subparsers.add_parser("send-market-email", help="Email a daily market summary to subscribers")
+    email.add_argument(
+        "--date",
+        default=datetime.now(NEW_YORK_TZ).date().isoformat(),
+        help="New York summary date in YYYY-MM-DD, default today",
+    )
+    email.add_argument("--database-url", default=None)
+    email.add_argument("--dry-run", action="store_true", help="Print the email instead of sending it")
+    email.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional max subscribers to email, useful for testing",
+    )
 
     args = parser.parse_args()
-    if args.command == "init-db":
-        _init_db(args)
-    elif args.command == "ingest":
-        _ingest(args)
+    if args.command == "ingest":
+        _ingest_news(args)
     elif args.command == "ingest-prices":
         _ingest_prices(args)
-    elif args.command == "reembed-chunks":
-        _reembed_chunks(args)
-    elif args.command == "ask":
-        _ask(
-            args.question,
-            backend=args.backend,
-            data_dir=Path(args.data_dir),
-            database_url=args.database_url,
-            embedding_provider=args.embedding_provider,
-            synthesize=not args.no_synthesis,
-            top_k=args.top_k,
-        )
-    elif args.command == "chat":
-        _chat(
-            backend=args.backend,
-            data_dir=Path(args.data_dir),
-            database_url=args.database_url,
-            embedding_provider=args.embedding_provider,
-            synthesize=not args.no_synthesis,
-            top_k=args.top_k,
-        )
+    elif args.command == "send-market-email":
+        _send_market_email(args)
 
 
-def _init_db(args: argparse.Namespace) -> None:
-    store = PgVectorStore(database_url=args.database_url)
-    try:
-        store.init_schema()
-    except Exception as exc:
-        raise SystemExit(_backend_error_message(exc)) from exc
-    print("Postgres pgvector schema is ready.")
-
-
-def _ingest(args: argparse.Namespace) -> None:
-    data_dir = Path(args.data_dir)
+def _ingest_news(args: argparse.Namespace) -> None:
     as_of = date.fromisoformat(args.date)
     if args.retention_days < 1:
         raise SystemExit("--retention-days must be at least 1")
+
     documents = fetch_todays_news(
         as_of=as_of,
         user_agent=args.user_agent,
@@ -143,45 +99,24 @@ def _ingest(args: argparse.Namespace) -> None:
     if not documents:
         raise SystemExit(f"No news items were found for {as_of}; existing data was not changed.")
 
-    news_count = len(documents)
-
-    if args.backend == "pgvector":
-        store = PgVectorStore(database_url=args.database_url, embedder=_make_embedder(args.embedding_provider))
-        try:
-            chunk_count = store.ingest_documents(documents)
-            pruned_count = store.prune_news(as_of=as_of, retention_days=args.retention_days)
-        except Exception as exc:
-            raise SystemExit(_backend_error_message(exc)) from exc
-        print(f"Indexed {chunk_count} pgvector chunks from {news_count} news items.")
-        print(f"Pruned {pruned_count} news documents outside the {args.retention_days}-day window.")
-        return
-
-    docs_path = data_dir / "documents.json"
-    index_path = data_dir / "index.json"
-    save_documents(documents, docs_path)
-    index = LocalVectorIndex.from_documents(documents)
-    index.save(index_path)
-
-    print(f"Indexed {len(index.chunks)} local chunks from {news_count} news items.")
-    print(f"Saved index to {index_path}")
-
-
-def _reembed_chunks(args: argparse.Namespace) -> None:
-    store = PgVectorStore(database_url=args.database_url, embedder=_make_embedder(args.embedding_provider))
     try:
-        count = store.reembed_chunks(
-            source_type="news",
-            limit=args.limit,
-            progress_callback=lambda done, total: print(f"Re-embedded {done:,}/{total:,} chunks..."),
+        store = PgVectorStore(
+            database_url=args.database_url,
+            embedder=HuggingFaceEmbedder(),
         )
+        chunk_count = store.ingest_documents(documents)
+        pruned_count = store.prune_news(as_of=as_of, retention_days=args.retention_days)
     except Exception as exc:
-        raise SystemExit(_backend_error_message(exc)) from exc
-    print(f"Re-embedded {count:,} chunks with {args.embedding_provider}.")
+        raise SystemExit(_ingestion_error_message(exc)) from exc
+
+    print(f"Indexed {chunk_count} pgvector chunks from {len(documents)} news items.")
+    print(f"Pruned {pruned_count} news documents outside the {args.retention_days}-day window.")
 
 
 def _ingest_prices(args: argparse.Namespace) -> None:
     if args.retention_days < 1:
         raise SystemExit("--retention-days must be at least 1")
+
     tickers = parse_tickers(args.tickers)
     if args.sp500:
         try:
@@ -207,14 +142,14 @@ def _ingest_prices(args: argparse.Namespace) -> None:
             f"Only fetched {len(snapshots):,}/{len(tickers):,} prices; refusing a partial snapshot.\n{sample}"
         )
 
-    store = PgVectorStore(database_url=args.database_url)
     try:
+        store = PgVectorStore(database_url=args.database_url)
         inserted, pruned = store.ingest_price_snapshots(
             snapshots,
             retention_days=args.retention_days,
         )
     except Exception as exc:
-        raise SystemExit(_backend_error_message(exc)) from exc
+        raise SystemExit(_ingestion_error_message(exc)) from exc
 
     print(f"Inserted or updated {inserted:,} {args.snapshot} price snapshots.")
     print(f"Pruned {pruned:,} price snapshots outside the {args.retention_days}-day window.")
@@ -224,115 +159,92 @@ def _ingest_prices(args: argparse.Namespace) -> None:
             print(f"  {failure}")
 
 
-def _ask(
-    question: str,
-    *,
-    backend: str,
-    data_dir: Path,
-    database_url: str,
-    embedding_provider: str,
-    synthesize: bool,
-    top_k: int,
-) -> None:
-    if backend == "pgvector":
-        store = PgVectorStore(database_url=database_url, embedder=_make_embedder(embedding_provider))
-        try:
-            results = store.search(question, top_k=top_k)
-        except Exception as exc:
-            raise SystemExit(_backend_error_message(exc)) from exc
-        print(answer_question(question, results, synthesize=synthesize))
-        return
-
-    index_path = data_dir / "index.json"
-    if not index_path.exists():
-        raise SystemExit(f"No index found at {index_path}. Run `finance-chat ingest` first.")
-    index = LocalVectorIndex.load(index_path)
-    results = index.search(question, top_k=top_k)
-    print(answer_question(question, results, synthesize=synthesize))
-
-
-def _chat(
-    *,
-    backend: str,
-    data_dir: Path,
-    database_url: str,
-    embedding_provider: str,
-    synthesize: bool,
-    top_k: int,
-) -> None:
-    index = None
-    store = None
-    if backend == "pgvector":
-        store = PgVectorStore(database_url=database_url, embedder=_make_embedder(embedding_provider))
-        try:
-            store.ping()
-        except Exception as exc:
-            raise SystemExit(_backend_error_message(exc)) from exc
-    else:
-        index_path = data_dir / "index.json"
-        if not index_path.exists():
-            raise SystemExit(f"No index found at {index_path}. Run `finance-chat ingest` first.")
-        index = LocalVectorIndex.load(index_path)
-
-    print("Finance chat ready. Ask a question, or type exit.")
-    while True:
-        question = input("\n> ").strip()
-        if question.lower() in {"exit", "quit", ":q"}:
-            break
-        if not question:
-            continue
-        if store:
-            try:
-                results = store.search(question, top_k=top_k)
-            except Exception as exc:
-                raise SystemExit(_backend_error_message(exc)) from exc
-        else:
-            assert index is not None
-            results = index.search(question, top_k=top_k)
-        print()
-        print(answer_question(question, results, synthesize=synthesize))
-
-
-def _backend_error_message(exc: Exception) -> str:
-    if "Hugging Face" in str(exc) or "HF_EMBEDDING_URL" in str(exc):
-        return (
-            "Could not get embeddings from Hugging Face.\n\n"
-            "Make sure your Hugging Face Space is running and set:\n"
-            "  export HF_EMBEDDING_URL=https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space/embed\n\n"
-            "Then retry with the Hugging Face provider:\n"
-            "  finance-chat reembed-chunks --embedding-provider huggingface --limit 25\n\n"
-            f"Original error: {exc}"
-        )
-
-    if isinstance(exc, URLError) or "Ollama" in str(exc):
-        return (
-            "Could not get local embeddings from Ollama.\n\n"
-            "Make sure Ollama is running and the embedding model is installed:\n"
-            "  ollama pull nomic-embed-text\n\n"
-            "Then retry with the Ollama provider:\n"
-            "  finance-chat ingest --backend pgvector --embedding-provider ollama\n\n"
-            f"Original error: {exc}"
-        )
-
+def _ingestion_error_message(exc: Exception) -> str:
     return (
-        "Could not connect to Postgres/pgvector.\n\n"
-        "For Supabase, use the transaction pooler URL with sslmode=require.\n"
-        "For local Postgres, make sure Docker Desktop is running and run:\n"
-        "  docker compose up -d\n\n"
+        "Finance AI ingestion failed.\n\n"
+        "Confirm DATABASE_URL uses the Supabase transaction pooler with sslmode=require.\n"
+        "News ingestion also requires HF_EMBEDDING_URL and, for a private Space, HF_TOKEN.\n\n"
         f"Original error: {exc}"
     )
 
 
-def _make_embedder(provider: str):
-    if provider == "ollama":
-        return OllamaEmbedder()
-    if provider == "huggingface":
-        return HuggingFaceEmbedder()
-    if provider == "sentence-transformers":
-        return SentenceTransformersEmbedder()
-    if provider == "hashing":
-        return HashingEmbedder()
-    raise ValueError(f"Unknown embedding provider: {provider}")
+def _send_market_email(args: argparse.Namespace) -> None:
+    summary_date = date.fromisoformat(args.date)
+    try:
+        store = PgVectorStore(database_url=args.database_url)
+        subscribers = store.fetch_active_email_subscribers()
+        if args.limit is not None:
+            subscribers = subscribers[: max(args.limit, 0)]
+        news_items = store.fetch_market_news_for_email(summary_date=summary_date)
+        gainers, losers = store.fetch_price_moves_for_email(summary_date=summary_date)
+    except Exception as exc:
+        raise SystemExit(_ingestion_error_message(exc)) from exc
+
+    email = build_market_email(
+        summary_date=summary_date,
+        news_items=news_items,
+        gainers=gainers,
+        losers=losers,
+        generation_url=os.getenv("HF_GENERATION_URL"),
+        app_url=os.getenv("MARKET_EMAIL_APP_URL"),
+    )
+
+    if args.dry_run:
+        print(email.subject)
+        print()
+        print(email.text)
+        print()
+        print(f"Would send to {len(subscribers):,} active subscribers.")
+        for subscriber in subscribers:
+            store.record_market_email_delivery(
+                email=subscriber,
+                summary_date=summary_date,
+                subject=email.subject,
+                status="dry_run",
+            )
+        return
+
+    if not subscribers:
+        print("No active email subscribers found.")
+        return
+
+    api_key = os.getenv("RESEND_API_KEY")
+    sender = os.getenv("MARKET_EMAIL_FROM")
+    if not api_key or not sender:
+        raise SystemExit("Set RESEND_API_KEY and MARKET_EMAIL_FROM to send market emails.")
+
+    sent = 0
+    failed = 0
+    for subscriber in subscribers:
+        try:
+            provider_id = send_resend_email(
+                api_key=api_key,
+                sender=sender,
+                recipient=subscriber,
+                subject=email.subject,
+                text=email.text,
+                html=email.html,
+                reply_to=os.getenv("MARKET_EMAIL_REPLY_TO"),
+            )
+            store.record_market_email_delivery(
+                email=subscriber,
+                summary_date=summary_date,
+                subject=email.subject,
+                status="sent",
+                provider_message_id=provider_id,
+            )
+            sent += 1
+        except Exception as exc:
+            store.record_market_email_delivery(
+                email=subscriber,
+                summary_date=summary_date,
+                subject=email.subject,
+                status="failed",
+                error=str(exc)[:1000],
+            )
+            failed += 1
+
+    print(f"Sent {sent:,} market emails for {summary_date}; {failed:,} failed.")
 
 
 if __name__ == "__main__":

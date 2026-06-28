@@ -4,13 +4,13 @@ import os
 from datetime import date, datetime, time as datetime_time, timedelta
 from zoneinfo import ZoneInfo
 
-from finance_rag.embeddings import DEFAULT_EMBEDDING_DIMENSIONS, OllamaEmbedder
-from finance_rag.index import LocalVectorIndex
-from finance_rag.models import Chunk, Document, SearchResult
+from finance_rag.email_summary import NewsItem, PriceMove
+from finance_rag.embeddings import HuggingFaceEmbedder
+from finance_rag.models import Document
 from finance_rag.prices import PriceSnapshot
+from finance_rag.text import chunk_documents
 
 
-DEFAULT_DATABASE_URL = "postgresql://finance_ai:finance_ai@localhost:5432/finance_ai"
 NEW_YORK_TZ = ZoneInfo("America/New_York")
 
 
@@ -19,90 +19,18 @@ class PgVectorStore:
         self,
         *,
         database_url: str | None = None,
-        embedder: object | None = None,
-        dimensions: int = DEFAULT_EMBEDDING_DIMENSIONS,
+        embedder: HuggingFaceEmbedder | None = None,
     ) -> None:
-        self.database_url = database_url or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
-        self._embedder = embedder
-        self.dimensions = embedder.dimensions if embedder else dimensions
-
-    @property
-    def embedder(self):
-        if self._embedder is None:
-            self._embedder = OllamaEmbedder(dimensions=self.dimensions)
-            self.dimensions = self._embedder.dimensions
-        return self._embedder
-
-    def init_schema(self) -> None:
-        dimensions = _validate_dimensions(self.dimensions)
-        with _connect(self.database_url) as conn:
-            conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS documents (
-                    id TEXT PRIMARY KEY,
-                    source_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    published_at TIMESTAMPTZ,
-                    raw_text TEXT NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-                """
-            )
-            conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS chunks (
-                    id TEXT PRIMARY KEY,
-                    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    source_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    chunk_text TEXT NOT NULL,
-                    published_at TIMESTAMPTZ,
-                    embedding vector({dimensions}) NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-                )
-                """
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS chunks_document_id_idx ON chunks(document_id)")
-            conn.execute("CREATE INDEX IF NOT EXISTS chunks_source_type_idx ON chunks(source_type)")
-            conn.execute("CREATE INDEX IF NOT EXISTS chunks_published_at_idx ON chunks(published_at)")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx "
-                "ON chunks USING hnsw (embedding vector_cosine_ops)"
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS price_snapshots (
-                    ticker TEXT NOT NULL,
-                    market_date DATE NOT NULL,
-                    snapshot_type TEXT NOT NULL CHECK (snapshot_type IN ('open', 'midday', 'close')),
-                    captured_at TIMESTAMPTZ NOT NULL,
-                    price NUMERIC(18, 6) NOT NULL,
-                    day_open NUMERIC(18, 6) NOT NULL,
-                    day_high NUMERIC(18, 6) NOT NULL,
-                    day_low NUMERIC(18, 6) NOT NULL,
-                    previous_close NUMERIC(18, 6),
-                    volume BIGINT NOT NULL,
-                    source TEXT NOT NULL,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    PRIMARY KEY (ticker, market_date, snapshot_type)
-                )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS price_snapshots_market_date_idx "
-                "ON price_snapshots(market_date)"
-            )
-
-    def ping(self) -> None:
-        with _connect(self.database_url) as conn:
-            conn.execute("SELECT 1").fetchone()
+        self.database_url = database_url or os.getenv("DATABASE_URL")
+        if not self.database_url:
+            raise ValueError("Set DATABASE_URL to the Supabase transaction pooler URL.")
+        self.embedder = embedder
 
     def ingest_documents(self, documents: list[Document]) -> int:
-        self.init_schema()
-        index = LocalVectorIndex.from_documents(documents)
+        chunks = chunk_documents(documents)
+        if chunks and self.embedder is None:
+            raise ValueError("An embedder is required to ingest news documents.")
+
         with _connect(self.database_url) as conn:
             for document in documents:
                 conn.execute(
@@ -135,7 +63,8 @@ class PgVectorStore:
                     ([document.id for document in documents],),
                 )
 
-            for chunk in index.chunks:
+            for chunk in chunks:
+                assert self.embedder is not None
                 embedding = self.embedder.embed_document(title=chunk.title, text=chunk.text)
                 conn.execute(
                     """
@@ -164,53 +93,7 @@ class PgVectorStore:
                         _vector_literal(embedding),
                     ),
                 )
-        return len(index.chunks)
-
-    def reembed_chunks(
-        self,
-        *,
-        source_type: str | None = None,
-        limit: int = 0,
-        progress_every: int = 25,
-        progress_callback: object | None = None,
-    ) -> int:
-        filters = []
-        params: list[object] = []
-        if source_type:
-            params.append(source_type)
-            filters.append(f"source_type = %s")
-        where = f"WHERE {' AND '.join(filters)}" if filters else ""
-        limit_sql = "LIMIT %s" if limit > 0 else ""
-        if limit > 0:
-            params.append(limit)
-
-        with _connect(self.database_url) as conn:
-            rows = conn.execute(
-                f"""
-                SELECT id, title, chunk_text
-                FROM chunks
-                {where}
-                ORDER BY updated_at ASC
-                {limit_sql}
-                """,
-                tuple(params),
-            ).fetchall()
-
-            for idx, (chunk_id, title, text) in enumerate(rows, start=1):
-                embedding = self.embedder.embed_document(title=title, text=text)
-                conn.execute(
-                    """
-                    UPDATE chunks
-                    SET embedding = %s::vector, updated_at = now()
-                    WHERE id = %s
-                    """,
-                    (_vector_literal(embedding), chunk_id),
-                )
-                if progress_every > 0 and idx % progress_every == 0:
-                    conn.commit()
-                    if progress_callback:
-                        progress_callback(idx, len(rows))
-        return len(rows)
+        return len(chunks)
 
     def prune_news(self, *, as_of: date, retention_days: int) -> int:
         cutoff = _news_retention_cutoff(as_of=as_of, retention_days=retention_days)
@@ -234,7 +117,6 @@ class PgVectorStore:
         if not snapshots:
             return 0, 0
 
-        self.init_schema()
         market_date = snapshots[0].market_date
         cutoff_date = _price_retention_cutoff(
             market_date=market_date,
@@ -244,8 +126,8 @@ class PgVectorStore:
             raise ValueError("All price snapshots in a batch must have the same market date.")
 
         with _connect(self.database_url) as conn:
-            with conn.cursor() as cur:
-                cur.executemany(
+            with conn.cursor() as cursor:
+                cursor.executemany(
                     """
                     INSERT INTO price_snapshots (
                         ticker, market_date, snapshot_type, captured_at, price,
@@ -285,67 +167,101 @@ class PgVectorStore:
             pruned_count = cursor.rowcount
         return len(snapshots), pruned_count
 
-    def search(self, query: str, *, top_k: int = 8) -> list[SearchResult]:
-        query_embedding = self.embedder.embed_query(query)
-        vector = _vector_literal(query_embedding)
-        params = (vector, vector, top_k)
-
+    def fetch_active_email_subscribers(self) -> list[str]:
         with _connect(self.database_url) as conn:
             rows = conn.execute(
-                f"""
-                SELECT
-                    id,
-                    document_id,
-                    source_type,
-                    title,
-                    url,
-                    chunk_text,
-                    published_at,
-                    1 - (embedding <=> %s::vector) AS score
-                FROM chunks
+                """
+                SELECT email
+                FROM email_subscribers
+                WHERE subscribed = true
+                ORDER BY created_at
+                """
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def fetch_market_news_for_email(self, *, summary_date: date, limit: int = 30) -> list[NewsItem]:
+        start = datetime.combine(summary_date, datetime_time.min, tzinfo=NEW_YORK_TZ)
+        end = start + timedelta(days=1)
+        with _connect(self.database_url) as conn:
+            rows = conn.execute(
+                """
+                SELECT title, url, raw_text
+                FROM documents
                 WHERE source_type = 'news'
-                  AND published_at >= date_trunc('day', now() AT TIME ZONE 'America/New_York')
-                      AT TIME ZONE 'America/New_York'
-                  AND published_at < (
-                      date_trunc('day', now() AT TIME ZONE 'America/New_York') + interval '1 day'
-                  ) AT TIME ZONE 'America/New_York'
-                ORDER BY embedding <=> %s::vector
+                  AND published_at >= %s
+                  AND published_at < %s
+                ORDER BY published_at DESC NULLS LAST, updated_at DESC
                 LIMIT %s
                 """,
-                params,
+                (start, end, limit),
             ).fetchall()
+        return [NewsItem(title=str(row[0]), url=str(row[1]), text=str(row[2])) for row in rows]
 
-        return [
-            SearchResult(
-                Chunk(
-                    id=row[0],
-                    document_id=row[1],
-                    source_type=row[2],
-                    title=row[3],
-                    url=row[4],
-                    text=row[5],
-                    published_at=_coerce_datetime(row[6]),
-                ),
-                float(row[7]),
+    def fetch_price_moves_for_email(
+        self,
+        *,
+        summary_date: date,
+        limit: int = 10,
+    ) -> tuple[list[PriceMove], list[PriceMove]]:
+        with _connect(self.database_url) as conn:
+            gainers = conn.execute(
+                """
+                SELECT ticker, price::float8, ((price - previous_close) / previous_close * 100)::float8 AS pct
+                FROM price_snapshots
+                WHERE market_date = %s
+                  AND snapshot_type = 'close'
+                  AND previous_close IS NOT NULL
+                  AND previous_close <> 0
+                ORDER BY pct DESC
+                LIMIT %s
+                """,
+                (summary_date, limit),
+            ).fetchall()
+            losers = conn.execute(
+                """
+                SELECT ticker, price::float8, ((price - previous_close) / previous_close * 100)::float8 AS pct
+                FROM price_snapshots
+                WHERE market_date = %s
+                  AND snapshot_type = 'close'
+                  AND previous_close IS NOT NULL
+                  AND previous_close <> 0
+                ORDER BY pct ASC
+                LIMIT %s
+                """,
+                (summary_date, limit),
+            ).fetchall()
+        return (_price_moves_from_rows(gainers), _price_moves_from_rows(losers))
+
+    def record_market_email_delivery(
+        self,
+        *,
+        email: str,
+        summary_date: date,
+        subject: str,
+        status: str,
+        provider_message_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        with _connect(self.database_url) as conn:
+            conn.execute(
+                """
+                INSERT INTO market_email_deliveries (
+                    email, summary_date, subject, status, provider_message_id, error
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (email, summary_date) DO UPDATE SET
+                    subject = EXCLUDED.subject,
+                    status = EXCLUDED.status,
+                    provider_message_id = EXCLUDED.provider_message_id,
+                    error = EXCLUDED.error,
+                    created_at = now()
+                """,
+                (email, summary_date, subject, status, provider_message_id, error),
             )
-            for row in rows
-        ]
 
 
 def _vector_literal(values: list[float]) -> str:
     return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
-
-
-def _validate_dimensions(dimensions: int) -> int:
-    if dimensions < 1 or dimensions > 16000:
-        raise ValueError("Embedding dimensions must be between 1 and 16000.")
-    return dimensions
-
-
-def _coerce_datetime(value: object) -> datetime | None:
-    if value is None or isinstance(value, datetime):
-        return value
-    raise TypeError(f"Expected datetime or None, got {type(value)!r}")
 
 
 def _news_retention_cutoff(*, as_of: date, retention_days: int) -> datetime:
@@ -361,16 +277,22 @@ def _price_retention_cutoff(*, market_date: date, retention_days: int) -> date:
     return market_date - timedelta(days=retention_days - 1)
 
 
+def _price_moves_from_rows(rows) -> list[PriceMove]:
+    return [
+        PriceMove(ticker=str(row[0]), price=float(row[1]), percent_change=float(row[2]))
+        for row in rows
+    ]
+
+
 def _load_psycopg():
     try:
         import psycopg
     except ImportError as exc:
-        raise RuntimeError("Install Postgres support with `pip install -e .` before using --backend pgvector.") from exc
+        raise RuntimeError("Install project dependencies with `pip install -e .`.") from exc
     return psycopg
 
 
 def _connect(database_url: str):
-    # Transaction poolers can reuse a server session across clients, so named
-    # prepared statements may collide. Psycopg's unprepared mode works with
-    # both Supabase pooler URLs and ordinary direct Postgres connections.
+    # Transaction poolers reuse server sessions, so named prepared statements
+    # can collide across clients.
     return _load_psycopg().connect(database_url, prepare_threshold=None)

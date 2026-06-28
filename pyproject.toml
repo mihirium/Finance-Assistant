@@ -1,23 +1,15 @@
 [project]
 name = "finance-ai"
 version = "0.1.0"
-description = "CLI RAG chatbot for daily financial news."
+description = "Scheduled ingestion service for Finance AI."
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi>=0.115",
     "psycopg[binary]>=3.2",
     "trafilatura>=2.0,<3",
-    "uvicorn[standard]>=0.32",
-]
-
-[project.optional-dependencies]
-local-embeddings = [
-    "sentence-transformers>=3.2",
 ]
 
 [project.scripts]
 finance-chat = "finance_rag.cli:main"
-finance-api = "finance_rag.api:main"
 
 [tool.setuptools.packages.find]
 include = ["finance_rag*"]
